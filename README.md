@@ -14,13 +14,13 @@ Open [http://localhost:5177](http://localhost:5177). Drafts and recipient lists 
 
 ### 1. Write the message
 
-In **Nachricht**, create or rename a draft, add a subject, and write the email with the visual editor. Use **Personalisieren** to insert recipient fields such as `{{firstName}}`; use **HTML** for custom markup. Buttons and horizontal dividers can be inserted from the toolbar. The live preview updates as you edit.
+In **Message**, create or rename a draft, add a subject, and write the email with the visual editor. Use **Personalize** to insert recipient fields such as `{{firstName}}`; use **HTML** for custom markup. Buttons and horizontal dividers can be inserted from the toolbar. The live preview updates as you edit.
 
 ![Message editor with a live email preview](docs/screenshots/01-message.png)
 
 ### 2. Prepare the recipient list
 
-In **Empfänger**, import a CSV or paste rows separated by commas, semicolons, or tabs. The input is data rows without a header. Check the detected rows, duplicates, invalid addresses, column names, and delivery roles. Mark the recipient address as **An**. Save a reusable list only in the local browser profile.
+In **Recipients**, import a CSV or paste rows separated by commas, semicolons, or tabs. The input is data rows without a header. Check the detected rows, duplicates, invalid addresses, column names, and delivery roles. Mark the recipient address as **To**. Save a reusable list only in the local browser profile.
 
 Use only contacts who are eligible to receive that message, such as applicants who opted in to updates. Remove people who have already joined if the campaign excludes them. The tool does not determine consent or membership for you.
 
@@ -28,23 +28,25 @@ Use only contacts who are eligible to receive that message, such as applicants w
 
 ### 3. Choose the design
 
-In **Gestaltung**, select a letter or card layout and adjust the colors, font, spacing, and width. The preview shows the selection; **Auf Entwurf anwenden** is the step that replaces the current draft's layout. Custom HTML templates must include `{{content}}`.
+In **Design**, select a letter or card layout and adjust the colors, font, spacing, and width. The preview shows the selection; **Apply to draft** is the step that replaces the current draft's layout. Custom HTML templates must include `{{content}}`.
 
 ![Email design controls and preview](docs/screenshots/03-design.png)
 
 ### 4. Preview and test
 
-Use **Vorschau** to check each recipient's personalization, desktop/mobile width, and how the email looks when external images are blocked. Then open **Versand** and enter your own test address. The test uses one selected row's personalization but is sent only to the test address; its Cc and Bcc fields are removed.
+Use **Preview** to check each recipient's personalization, desktop/mobile width, and how the email looks when external images are blocked. Then open **Send** and enter your own test address. The test uses one selected row's personalization but is sent only to the test address; its Cc and Bcc fields are removed.
+
+![Email preview with external images loaded](docs/screenshots/04-preview.png)
 
 ### 5. Send
 
-On **Versand**, review the recipient count and checklist. The tool sends one individually addressed message for each data row, with a confirmation before the bulk run. Check the recipient list, test result, subject, links, and audience before confirming. Use small batches and pause if Gmail reports a limit or delivery problem; applicable limits depend on the account and Google's policies.
+On **Send**, review the recipient count and checklist. The tool sends one individually addressed message for each data row, with a confirmation before the bulk run. Check the recipient list, test result, subject, links, and audience before confirming. Use small batches and pause if Gmail reports a limit or delivery problem; applicable limits depend on the account and Google's policies.
 
 ![Send checklist and explicit test-address field](docs/screenshots/04-send-check.png)
 
 ## Connect the Gmail account
 
-1. Open **Absender & Konto** in the sidebar and enter the sender's Gmail or Google Workspace address.
+1. Open **Sender & Account** in the sidebar and enter the sender's Gmail or Google Workspace address.
 2. Mailbot's default sign-in method is a Google **App Password**. Google requires 2-Step Verification to create one. Generate it in the Google Account's App Passwords settings, then paste it into the app-password field. Do not use the normal Google account password. Google's current instructions and restrictions are [here](https://support.google.com/accounts/answer/185833).
 3. Test the connection. The app password stays in the current browser tab's memory and is not written to local storage or sent to GitHub. It is used by the local Mailbot server to authenticate to Gmail SMTP. Re-enter it after closing or refreshing the tab.
 

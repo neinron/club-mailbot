@@ -24,15 +24,15 @@ function normalizeHeader(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
-    .replaceAll("ä", "ae")
-    .replaceAll("ö", "oe")
-    .replaceAll("ü", "ue")
-    .replaceAll("ß", "ss");
+    .replaceAll("\u00e4", "ae")
+    .replaceAll("\u00f6", "oe")
+    .replaceAll("\u00fc", "ue")
+    .replaceAll("\u00df", "ss");
 }
 
 function serializeError(error) {
   return {
-    message: error.message || "Unbekannter Fehler.",
+    message: error.message || "An unknown error occurred.",
     trace: Array.isArray(error.trace) ? error.trace : []
   };
 }
@@ -325,27 +325,27 @@ async function handleSend(req, res) {
     const smtpSecurity = payload.smtpSecurity === "starttls587" ? "starttls587" : "ssl465";
 
     if (!payload.accountEmail || !authSecret) {
-      return sendJson(res, 400, { error: "Gmail-Adresse und App-Passwort/OAuth-Token fehlen.", trace: [] });
+      return sendJson(res, 400, { error: "Gmail address and app password/OAuth token are required.", trace: [] });
     }
     if (!String(payload.subject || "").trim()) {
-      return sendJson(res, 400, { error: "Betreff fehlt." });
+      return sendJson(res, 400, { error: "Subject is required." });
     }
     if (!String(payload.body || "").trim() && !normalizeHtmlBody(payload.htmlBody)) {
-      return sendJson(res, 400, { error: "Nachricht fehlt." });
+      return sendJson(res, 400, { error: "Email content is required." });
     }
     if (!recipients.length) {
-      return sendJson(res, 400, { error: "Keine gültigen Empfänger gefunden." });
+      return sendJson(res, 400, { error: "No valid recipients found." });
     }
     if (recipients.length > maxRecipients) {
-      return sendJson(res, 400, { error: `Maximal ${maxRecipients} Empfänger pro Lauf.` });
+      return sendJson(res, 400, { error: `Maximum ${maxRecipients} recipients per run.` });
     }
 
     const testEmail = String(payload.testEmail || "").trim();
     if (payload.testOnly && !emailPattern.test(testEmail)) {
-      return sendJson(res, 400, { error: "Eine gültige Testadresse fehlt." });
+      return sendJson(res, 400, { error: "A valid test address is required." });
     }
     if (!String(payload.htmlBody || "").includes("{{content}}")) {
-      return sendJson(res, 400, { error: "Die Design-Vorlage muss {{content}} enthalten." });
+      return sendJson(res, 400, { error: "The design template must include {{content}}." });
     }
     const previewIndex = Math.max(0, Math.min(recipients.length - 1, Number(payload.previewIndex) || 0));
     const selectedRecipients = payload.testOnly ? [recipients[Math.floor(previewIndex)]] : recipients;
@@ -357,7 +357,7 @@ async function handleSend(req, res) {
           ? { to: [testEmail], cc: [], bcc: [], replyTo: [] }
           : collectMessageAddresses(recipient, recipientColumns);
         if (!addresses.to.length) {
-          throw new Error("Keine Empfängeradresse mit Rolle 'An' gefunden.");
+          throw new Error("No recipient address with the “To” role was found.");
         }
         const htmlBody = renderHtmlMessage(
           normalizeHtmlBody(payload.htmlBody),
@@ -407,7 +407,7 @@ async function handleTestAuth(req, res) {
     const smtpSecurity = payload.smtpSecurity === "starttls587" ? "starttls587" : "ssl465";
 
     if (!payload.accountEmail || !authSecret) {
-      return sendJson(res, 400, { error: "Gmail-Adresse und App-Passwort/OAuth-Token fehlen.", trace: [] });
+      return sendJson(res, 400, { error: "Gmail address and app password/OAuth token are required.", trace: [] });
     }
 
     const result = await testGmailSmtpAuth({
@@ -463,5 +463,5 @@ createServer((req, res) => {
 
   sendJson(res, 405, { error: "Method not allowed." });
 }).listen(port, host, () => {
-  console.log(`Club-Mailbot läuft auf http://${host}:${port}`);
+  console.log(`Club Mailbot is running at http://${host}:${port}`);
 });

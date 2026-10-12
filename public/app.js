@@ -15,8 +15,8 @@ const autosaveDelayMs = 500;
 const clubEmailLogoUrl = "https://tum-socialaiclub.de/assets/logos/LOGO_V6-ICON%2BTUM_SOCIAL_CLUB-single_line-dark_text.svg";
 const defaultRecipientColumns = [
   { key: "name", label: "Name", role: "text" },
-  { key: "email", label: "E-Mail", role: "to" },
-  { key: "interviewLink", label: "Interview-Link", role: "text" }
+  { key: "email", label: "Email", role: "to" },
+  { key: "interviewLink", label: "Interview link", role: "text" }
 ];
 
 const elements = {
@@ -147,10 +147,10 @@ function normalizeHeader(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
-    .replaceAll("ä", "ae")
-    .replaceAll("ö", "oe")
-    .replaceAll("ü", "ue")
-    .replaceAll("ß", "ss");
+    .replaceAll("\u00e4", "ae")
+    .replaceAll("\u00f6", "oe")
+    .replaceAll("\u00fc", "ue")
+    .replaceAll("\u00df", "ss");
 }
 
 function isConformVariableLabel(value) {
@@ -546,7 +546,7 @@ function updateEditorVariables() {
       .filter((label) => !isConformVariableLabel(label));
 
     elements.recipientVariableWarning.textContent = invalidLabels.length
-      ? `Warnung: Diese Spaltennamen sind für Platzhalter unpraktisch, weil sie Leerzeichen oder Sonderzeichen enthalten: ${invalidLabels.join(", ")}. Besser sind Namen wie firstName oder interviewLink.`
+      ? `Warning: These column names are awkward as placeholders because they contain spaces or special characters: ${invalidLabels.join(", ")}. Use names like firstName or interviewLink.`
       : "";
   }
 }
@@ -592,11 +592,11 @@ function setTableSaveStatus(message) {
 }
 
 function formatTrace(trace = []) {
-  if (!trace.length) return "Keine SMTP-Trace-Daten erhalten.";
+  if (!trace.length) return "No SMTP trace data received.";
   return trace
     .map((entry) => {
       const label = entry.direction === "C" ? "CLIENT" : entry.direction === "S" ? "SERVER" : "INFO";
-      return `[${new Date(entry.at).toLocaleTimeString("de-DE")}] ${label} ${entry.message}`;
+      return `[${new Date(entry.at).toLocaleTimeString("en-GB")}] ${label} ${entry.message}`;
     })
     .join("\n");
 }
@@ -608,8 +608,8 @@ function showLogs(trace = [], heading = "") {
 
 function updateAuthUi() {
   const isOauth = elements.authMode.value === "xoauth2";
-  elements.secretLabel.textContent = isOauth ? "OAuth Access Token" : "App-Passwort";
-  elements.appPassword.placeholder = isOauth ? "ya29... Access Token" : "16-stelliges App-Passwort";
+  elements.secretLabel.textContent = isOauth ? "OAuth Access Token" : "App password";
+  elements.appPassword.placeholder = isOauth ? "ya29... Access Token" : "16-character app password";
 }
 
 function syncRawRecipientsFromTable() {
@@ -622,7 +622,7 @@ function syncRawRecipientsFromTable() {
 }
 
 function collectDraft() {
-  const draftName = String(elements.draftName.value || "").trim() || "Standardentwurf";
+  const draftName = String(elements.draftName.value || "").trim() || "Untitled draft";
   return {
     draftName,
     accountEmail: elements.accountEmail.value.trim(),
@@ -641,7 +641,7 @@ function collectDraft() {
 }
 
 function normalizeDraftName(value) {
-  return String(value || "").trim() || "Standardentwurf";
+  return String(value || "").trim() || "Untitled draft";
 }
 
 function readDraftCollection() {
@@ -677,12 +677,12 @@ function getSelectedDraftName() {
 function updateDraftSelectOptions(selectedName = "") {
   const collection = readDraftCollection();
   renderSidebarDrafts(collection, selectedName);
-  const names = Object.keys(collection).sort((left, right) => left.localeCompare(right, "de"));
+  const names = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
   const fallback = names.length ? names[0] : "";
   const activeName = selectedName && collection[selectedName] ? selectedName : fallback;
 
   if (!names.length) {
-    elements.draftSelect.innerHTML = '<option value="">Keine Entwürfe gespeichert</option>';
+    elements.draftSelect.innerHTML = '<option value="">No saved drafts</option>';
     elements.draftSelect.value = "";
     elements.deleteDraftButton.disabled = true;
     if (elements.summaryDraftCount) {
@@ -702,7 +702,7 @@ function updateDraftSelectOptions(selectedName = "") {
 }
 
 function normalizeTableName(value) {
-  return String(value || "").trim() || "Standardtabelle";
+  return String(value || "").trim() || "Default list";
 }
 
 function readTableCollection() {
@@ -738,12 +738,12 @@ function getSelectedTableName() {
 function updateTableSelectOptions(selectedName = "") {
   if (!elements.tableSelect) return;
   const collection = readTableCollection();
-  const names = Object.keys(collection).sort((left, right) => left.localeCompare(right, "de"));
+  const names = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
   const fallback = names.length ? names[0] : "";
   const activeName = selectedName && collection[selectedName] ? selectedName : fallback;
 
   if (!names.length) {
-    elements.tableSelect.innerHTML = '<option value="">Keine Tabellen gespeichert</option>';
+    elements.tableSelect.innerHTML = '<option value="">No saved lists</option>';
     elements.tableSelect.value = "";
     if (elements.deleteTableButton) elements.deleteTableButton.disabled = true;
     return;
@@ -758,7 +758,7 @@ function updateTableSelectOptions(selectedName = "") {
 
 function formatSavedAt(value) {
   if (!value) return "";
-  return new Intl.DateTimeFormat("de-DE", {
+  return new Intl.DateTimeFormat("en-GB", {
     dateStyle: "short",
     timeStyle: "short"
   }).format(new Date(value));
@@ -770,7 +770,7 @@ function saveDraft() {
     const collection = readDraftCollection();
     const previousName = getSelectedDraftName();
     if (previousName !== draft.draftName && collection[draft.draftName]) {
-      setSaveStatus("Dieser Entwurfsname existiert bereits. Bitte einen anderen Namen wählen.");
+      setSaveStatus("A draft with this name already exists. Choose another name.");
       return false;
     }
     if (previousName !== draft.draftName) delete collection[previousName];
@@ -778,10 +778,10 @@ function saveDraft() {
     writeDraftCollection(collection);
     updateDraftSelectOptions(draft.draftName);
     setSelectedDraftName(draft.draftName);
-    setSaveStatus(`Gespeichert: ${formatSavedAt(draft.savedAt)}. App-Passwort wurde nicht gespeichert.`);
+    setSaveStatus(`Saved: ${formatSavedAt(draft.savedAt)}. The app password was not saved.`);
     return true;
   } catch {
-    setSaveStatus("Speichern im Browser ist fehlgeschlagen.");
+    setSaveStatus("Could not save in this browser.");
     return false;
   }
 }
@@ -803,10 +803,10 @@ function saveTableState() {
     writeTableCollection(collection);
     updateTableSelectOptions(table.tableName);
     setSelectedTableName(table.tableName);
-    setTableSaveStatus(`Tabelle gespeichert: ${formatSavedAt(table.savedAt)}`);
+    setTableSaveStatus(`List saved: ${formatSavedAt(table.savedAt)}`);
     return true;
   } catch {
-    setTableSaveStatus("Tabellenspeicherung fehlgeschlagen.");
+    setTableSaveStatus("Could not save the list.");
     return false;
   }
 }
@@ -848,11 +848,11 @@ function applyTableState(table, showStatus = true) {
     updateTableSelectOptions(normalizeTableName(table.tableName));
     setSelectedTableName(table.tableName);
     if (showStatus) {
-      setTableSaveStatus(`Tabelle geladen: ${formatSavedAt(table.savedAt)}`);
+      setTableSaveStatus(`List loaded: ${formatSavedAt(table.savedAt)}`);
     }
     return true;
   } catch {
-    setTableSaveStatus("Gespeicherte Tabelle konnte nicht geladen werden.");
+    setTableSaveStatus("Could not load the saved list.");
     return false;
   } finally {
     isHydratingDraft = false;
@@ -866,7 +866,7 @@ function loadTableState(showStatus = true) {
 
   if (!table) {
     updateTableSelectOptions();
-    if (showStatus) setTableSaveStatus("Keine gespeicherte Tabelle mit diesem Namen gefunden.");
+    if (showStatus) setTableSaveStatus("No saved list with this name was found.");
     return false;
   }
 
@@ -878,7 +878,7 @@ function deleteTableState() {
   const collection = readTableCollection();
 
   if (!collection[selectedName]) {
-    setTableSaveStatus("Keine gespeicherte Tabelle zum Löschen gefunden.");
+    setTableSaveStatus("No saved list to delete was found.");
     return false;
   }
 
@@ -886,15 +886,15 @@ function deleteTableState() {
 
   try {
     writeTableCollection(collection);
-    const remainingNames = Object.keys(collection).sort((left, right) => left.localeCompare(right, "de"));
-    const nextName = remainingNames[0] || "Standardtabelle";
+    const remainingNames = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
+    const nextName = remainingNames[0] || "Default list";
     if (elements.tableName) elements.tableName.value = nextName;
     updateTableSelectOptions(nextName);
     setSelectedTableName(nextName);
-    setTableSaveStatus(`Tabelle "${selectedName}" gelöscht.`);
+    setTableSaveStatus(`List "${selectedName}" deleted.`);
     return true;
   } catch {
-    setTableSaveStatus("Tabelle konnte nicht gelöscht werden.");
+    setTableSaveStatus("Could not delete the list.");
     return false;
   }
 }
@@ -927,11 +927,11 @@ function applyDraft(draft, showStatus = true) {
     updateDraftSelectOptions(normalizeDraftName(draft.draftName));
     setSelectedDraftName(draft.draftName);
     if (showStatus) {
-      setSaveStatus(`Geladen: ${formatSavedAt(draft.savedAt)}. App-Passwort muss neu eingetragen werden.`);
+      setSaveStatus(`Loaded: ${formatSavedAt(draft.savedAt)}. Re-enter the app password.`);
     }
     return true;
   } catch {
-    setSaveStatus("Gespeicherte Daten konnten nicht gelesen werden.");
+    setSaveStatus("Could not read saved data.");
     return false;
   } finally {
     isHydratingDraft = false;
@@ -945,7 +945,7 @@ function loadDraft(showStatus = true) {
 
   if (!draft) {
     updateDraftSelectOptions();
-    if (showStatus) setSaveStatus("Kein gespeicherter Entwurf mit diesem Namen gefunden.");
+    if (showStatus) setSaveStatus("No saved draft with this name was found.");
     return false;
   }
 
@@ -957,7 +957,7 @@ function deleteDraft() {
   const collection = readDraftCollection();
 
   if (!collection[selectedName]) {
-    setSaveStatus("Kein gespeicherter Entwurf zum Löschen gefunden.");
+    setSaveStatus("No saved draft to delete was found.");
     return false;
   }
 
@@ -965,15 +965,15 @@ function deleteDraft() {
 
   try {
     writeDraftCollection(collection);
-    const remainingNames = Object.keys(collection).sort((left, right) => left.localeCompare(right, "de"));
-    const nextName = remainingNames[0] || "Standardentwurf";
+    const remainingNames = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
+    const nextName = remainingNames[0] || "Untitled draft";
     elements.draftName.value = nextName;
     updateDraftSelectOptions(nextName);
     setSelectedDraftName(nextName);
-    setSaveStatus(`Entwurf "${selectedName}" gelöscht.`);
+    setSaveStatus(`Draft "${selectedName}" deleted.`);
     return true;
   } catch {
-    setSaveStatus("Entwurf konnte nicht gelöscht werden.");
+    setSaveStatus("Could not delete the draft.");
     return false;
   }
 }
@@ -1003,7 +1003,7 @@ function addColumn() {
   const nextColumn = canonicalColumnFromHeader(label);
 
   if (recipientColumns.some((column) => column.key === nextColumn.key)) {
-    setStatus(`Property "${nextColumn.label}" existiert bereits.`, "error");
+    setStatus(`Column "${nextColumn.label}" already exists.`, "error");
     return;
   }
 
@@ -1013,14 +1013,14 @@ function addColumn() {
   updateTable();
   updatePreview();
   queueAutosave();
-  setStatus(`Property "${nextColumn.label}" hinzugefügt.`, "ok");
+  setStatus(`Column "${nextColumn.label}" added.`, "ok");
 }
 
 function deleteColumn(index) {
   const column = recipientColumns[index];
   if (!column) return;
   if (recipientColumns.length <= 1) {
-    setStatus("Mindestens eine Spalte muss bestehen bleiben.", "error");
+    setStatus("At least one column must remain.", "error");
     return;
   }
 
@@ -1034,7 +1034,7 @@ function deleteColumn(index) {
   updateTable();
   updatePreview();
   queueAutosave();
-  setStatus(`Property "${column.label}" gelöscht.`, "ok");
+  setStatus(`Column "${column.label}" deleted.`, "ok");
 }
 
 function renameColumn(index, nextLabel) {
@@ -1045,7 +1045,7 @@ function renameColumn(index, nextLabel) {
   next.role = recipientColumns[index].role || next.role;
 
   if (recipientColumns.some((column, columnIndex) => columnIndex !== index && column.key === next.key)) {
-    setStatus(`Property "${next.label}" existiert bereits.`, "error");
+    setStatus(`Column "${next.label}" already exists.`, "error");
     return;
   }
 
@@ -1121,9 +1121,9 @@ function applyPastedRecipientTable(startRow, startColumnIndex, text) {
 }
 
 function updateTable() {
-  elements.recipientCount.textContent = `${recipients.length} gültig`;
-  elements.duplicateCount.textContent = `${parseStats.duplicates} Duplikate`;
-  elements.invalidCount.textContent = `${parseStats.invalid} ungültig`;
+  elements.recipientCount.textContent = `${recipients.length} valid`;
+  elements.duplicateCount.textContent = `${parseStats.duplicates} duplicates`;
+  elements.invalidCount.textContent = `${parseStats.invalid} invalid`;
   if (elements.summaryRecipientCount) {
     elements.summaryRecipientCount.textContent = String(recipients.length);
   }
@@ -1138,26 +1138,26 @@ function updateTable() {
               class="table-header-input"
               data-column-index="${index}"
               value="${escapeHtml(column.label)}"
-              aria-label="Spaltenname ${escapeHtml(column.label)}"
+              aria-label="Column name ${escapeHtml(column.label)}"
             />
-            <button type="button" class="table-icon-button" data-delete-column="${index}" aria-label="Spalte löschen">×</button>
+            <button type="button" class="table-icon-button" data-delete-column="${index}" aria-label="Delete column">×</button>
           </div>
-          <select class="table-role-select" data-column-role-index="${index}" aria-label="Versandrolle ${escapeHtml(column.label)}">
+          <select class="table-role-select" data-column-role-index="${index}" aria-label="Delivery role ${escapeHtml(column.label)}">
             <option value="text" ${column.role === "text" ? "selected" : ""}>Text</option>
-            <option value="to" ${column.role === "to" ? "selected" : ""}>An</option>
+            <option value="to" ${column.role === "to" ? "selected" : ""} >To</option>
             <option value="cc" ${column.role === "cc" ? "selected" : ""}>Cc</option>
             <option value="bcc" ${column.role === "bcc" ? "selected" : ""}>Bcc</option>
             <option value="replyTo" ${column.role === "replyTo" ? "selected" : ""}>Reply-To</option>
           </select>
         </th>
       `).join("")}
-      <th>Aktion</th>
-      <th><button type="button" class="table-icon-button table-add-column" data-add-column="true" aria-label="Spalte hinzufügen">+</button></th>
+      <th>Action</th>
+      <th><button type="button" class="table-icon-button table-add-column" data-add-column="true" aria-label="Add column">+</button></th>
     </tr>
   `;
 
   if (!recipients.length) {
-    elements.recipientRows.innerHTML = `<tr><td colspan="${recipientColumns.length + 2}">Noch keine Empfänger erkannt.</td></tr>`;
+    elements.recipientRows.innerHTML = `<tr><td colspan="${recipientColumns.length + 2}">No recipients detected yet.</td></tr>`;
     updateEditorVariables();
     return;
   }
@@ -1177,7 +1177,7 @@ function updateTable() {
             />
           </td>
         `).join("")}
-        <td><button type="button" class="ghost mini-button" data-remove-row="${rowIndex}">Löschen</button></td>
+        <td><button type="button" class="ghost mini-button" data-remove-row="${rowIndex}">Delete</button></td>
         <td></td>
       </tr>
     `)
@@ -1191,7 +1191,7 @@ function updatePreview() {
   const recipient = recipients[previewIndex];
   const renderedHtml = renderHtmlMessage(elements.htmlBody.value, elements.body.value, recipient || {name:"Alex Example",email:"alex@example.com"});
   if (elements.messagePreviewRecipient) {
-    elements.messagePreviewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "kein Empfänger";
+    elements.messagePreviewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "No recipient";
   }
   if (elements.messagePreviewSubject) {
     elements.messagePreviewSubject.textContent = renderTemplate(elements.subject.value, recipient);
@@ -1206,9 +1206,9 @@ function updatePreview() {
       );
       if (contentHeight) messagePreview.style.height = `${contentHeight}px`;
     };
-    messagePreview.srcdoc = renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">Noch kein HTML-Design vorhanden.</p>";
+    messagePreview.srcdoc = renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>";
   }
-  elements.previewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "kein Empfänger";
+  elements.previewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "No recipient";
   elements.previewSubject.textContent = renderTemplate(elements.subject.value, recipient);
   if (document.activeElement !== elements.previewBody) {
     elements.previewBody.value = elements.body.value;
@@ -1222,7 +1222,7 @@ function updatePreview() {
     );
     elements.htmlPreview.style.height = `${contentHeight}px`;
   };
-  elements.htmlPreview.srcdoc = previewHtmlWithBlockedImages(renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">Noch kein HTML-Design vorhanden.</p>");
+  elements.htmlPreview.srcdoc = previewHtmlWithBlockedImages(renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>");
 
   const canSend = Boolean(
     emailPattern.test(elements.accountEmail.value.trim())
@@ -1235,21 +1235,21 @@ function updatePreview() {
   elements.testButton.disabled = sending || !canSend || !emailPattern.test(document.querySelector("#testEmail").value.trim());
   elements.sendButton.disabled = sending || !canSend;
   if (elements.summaryReady) {
-    elements.summaryReady.textContent = canSend ? "Ja" : "Nein";
+    elements.summaryReady.textContent = canSend ? "Yes" : "No";
   }
   if (studioReady) syncStudio();
 }
 
 async function testAuth() {
   if (!elements.accountEmail.value.trim() || !elements.appPassword.value.trim()) {
-    setStatus("Gmail-Adresse und App-Passwort/OAuth-Token fehlen.", "error");
-    showLogs([], "Verbindungstest nicht gestartet.");
+    setStatus("Gmail address and app password/OAuth token are required.", "error");
+    showLogs([], "Connection test not started.");
     return;
   }
 
   elements.testAuthButton.disabled = true;
-  setStatus("SMTP-Verbindung wird getestet...", "");
-  showLogs([], "SMTP-Verbindungstest läuft...");
+  setStatus("Testing SMTP connection...", "");
+  showLogs([], "SMTP connection test running...");
 
   try {
     const response = await fetch("/api/test-auth", {
@@ -1263,13 +1263,13 @@ async function testAuth() {
       })
     });
     const payload = await response.json();
-    showLogs(payload.trace || [], response.ok ? "Verbindungstest erfolgreich." : "Verbindungstest fehlgeschlagen.");
+    showLogs(payload.trace || [], response.ok ? "Connection test successful." : "Connection test failed.");
 
     if (!response.ok) {
-      throw new Error(payload.error || "Verbindungstest fehlgeschlagen.");
+      throw new Error(payload.error || "Connection test failed.");
     }
 
-    setStatus("Gmail SMTP Login erfolgreich. Du kannst jetzt eine Test-Mail senden.", "ok");
+    setStatus("Gmail SMTP login successful. You can now send a test email.", "ok");
   } catch (error) {
     setStatus(error.message, "error");
   } finally {
@@ -1283,22 +1283,22 @@ function parseCurrentInput() {
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
-  setStatus(`${recipients.length} gültige Empfänger erkannt. Tabelle kann jetzt angepasst werden.`, recipients.length ? "ok" : "error");
+  setStatus(`${recipients.length} valid recipients detected. The list is ready to edit.`, recipients.length ? "ok" : "error");
 }
 
 async function send(testOnly) {
   if (!recipients.length || sending) return;
   const testEmail = document.querySelector("#testEmail").value.trim();
-  if (testOnly && !emailPattern.test(testEmail)) { setStatus("Bitte eine gültige Testadresse eintragen.", "error"); return; }
+  if (testOnly && !emailPattern.test(testEmail)) { setStatus("Enter a valid test address.", "error"); return; }
 
-  const verb = testOnly ? "Test-Mail" : `${recipients.length} Mails`;
-  const confirmed = testOnly || window.confirm(`${verb} über ${elements.accountEmail.value.trim()} senden?`);
+  const verb = testOnly ? "Test email" : `${recipients.length} emails`;
+  const confirmed = testOnly || window.confirm(`Send ${verb} from ${elements.accountEmail.value.trim()}?`);
   if (!confirmed) return;
 
   sending = true;
   elements.testButton.disabled = true;
   elements.sendButton.disabled = true;
-  setStatus(`${verb} wird gesendet... Browser-Tab bitte offen lassen.`);
+  setStatus(`Sending ${verb}... Keep this browser tab open.`);
 
   try {
     const response = await fetch("/api/send", {
@@ -1324,17 +1324,17 @@ async function send(testOnly) {
     const payload = await response.json();
 
     if (!response.ok) {
-      showLogs(payload.trace || [], "Versand fehlgeschlagen.");
-      throw new Error(payload.error || "Versand fehlgeschlagen.");
+      showLogs(payload.trace || [], "Send failed.");
+      throw new Error(payload.error || "Send failed.");
     }
 
     const failed = payload.results.filter((result) => !result.ok);
     const lastTrace = payload.results.find((result) => result.trace?.length)?.trace || payload.trace || [];
-    showLogs(lastTrace, failed.length ? "SMTP-Trace mit Fehler." : "SMTP-Trace erfolgreich.");
+    showLogs(lastTrace, failed.length ? "SMTP trace contains an error." : "SMTP trace successful.");
     if (failed.length) {
-      setStatus(`${payload.sent}/${payload.total} gesendet. Fehler bei: ${failed.map((item) => item.email).join(", ")}`, "error");
+      setStatus(`${payload.sent}/${payload.total} sent. Failed for: ${failed.map((item) => item.email).join(", ")}`, "error");
     } else {
-      setStatus(`${payload.sent}/${payload.total} erfolgreich gesendet.`, "ok");
+      setStatus(`${payload.sent}/${payload.total} sent successfully.`, "ok");
     }
   } catch (error) {
     setStatus(error.message, "error");
@@ -1353,17 +1353,17 @@ elements.addRecipientButton.addEventListener("click", addRecipient);
 
 elements.saveTableButton?.addEventListener("click", () => {
   const saved = saveTableState();
-  setStatus(saved ? "Empfängertabelle gespeichert." : "Tabelle konnte nicht gespeichert werden.", saved ? "ok" : "error");
+  setStatus(saved ? "Recipient list saved." : "Could not save the list.", saved ? "ok" : "error");
 });
 
 elements.loadTableButton?.addEventListener("click", () => {
   const loaded = loadTableState(true);
-  setStatus(loaded ? "Empfängertabelle geladen." : "Tabelle konnte nicht geladen werden.", loaded ? "ok" : "error");
+  setStatus(loaded ? "Recipient list loaded." : "Could not load the list.", loaded ? "ok" : "error");
 });
 
 elements.deleteTableButton?.addEventListener("click", () => {
   const deleted = deleteTableState();
-  setStatus(deleted ? "Empfängertabelle gelöscht." : "Tabelle konnte nicht gelöscht werden.", deleted ? "ok" : "error");
+  setStatus(deleted ? "Recipient list deleted." : "Could not delete the list.", deleted ? "ok" : "error");
 });
 
 elements.clearButton.addEventListener("click", () => {
@@ -1374,25 +1374,25 @@ elements.clearButton.addEventListener("click", () => {
   updateTable();
   updatePreview();
   queueAutosave();
-  setStatus("Liste geleert.");
+  setStatus("List cleared.");
 });
 
 elements.saveDraftButton.addEventListener("click", () => {
   const saved = saveDraft();
   setStatus(
-    saved ? "Absenderdaten, Tabelle und Mail-Template wurden lokal gespeichert." : "Speichern im Browser ist fehlgeschlagen.",
+    saved ? "Sender details, recipient list, and email template were saved locally." : "Could not save in this browser.",
     saved ? "ok" : "error"
   );
 });
 
 elements.loadDraftButton.addEventListener("click", () => {
   const loaded = loadDraft(true);
-  setStatus(loaded ? "Gespeicherte Daten geladen." : "Keine gespeicherten Daten gefunden.", loaded ? "ok" : "error");
+  setStatus(loaded ? "Saved data loaded." : "No saved data found.", loaded ? "ok" : "error");
 });
 
 elements.deleteDraftButton.addEventListener("click", () => {
   const deleted = deleteDraft();
-  setStatus(deleted ? "Gespeicherter Entwurf gelöscht." : "Entwurf konnte nicht gelöscht werden.", deleted ? "ok" : "error");
+  setStatus(deleted ? "Saved draft deleted." : "Could not delete the draft.", deleted ? "ok" : "error");
 });
 
 elements.pageLinks.forEach((link) => {
@@ -1536,7 +1536,7 @@ elements.testButton.addEventListener("click", () => send(true));
 elements.sendButton.addEventListener("click", () => send(false));
 elements.testAuthButton.addEventListener("click", testAuth);
 elements.clearLogsButton.addEventListener("click", () => {
-  elements.smtpLogs.textContent = 'Noch keine SMTP-Logs. Nutze "Verbindung testen" oder sende eine Test-Mail.';
+  elements.smtpLogs.textContent = 'No SMTP logs yet. Use “Test connection” or send a test email.';
 });
 
 updateAuthUi();
@@ -1577,7 +1577,7 @@ function buttonChip(label, target, variant = 'gradient') {
   span.dataset.target = target;
   span.dataset.variant = variant;
   span.textContent = label + ' ↗';
-  span.title = target + ' · Klicken zum Bearbeiten';
+  span.title = target + ' · Click to edit';
   return span.outerHTML;
 }
 
@@ -1671,15 +1671,15 @@ function updateDesignPreview() {
 function syncStudio() {
   syncVisualEditor();
   const select = document.querySelector('#previewSelect');
-  const options = recipients.map((r,i) => `<option value="${i}">${escapeHtml(r.name || r.email)}</option>`).join('') || '<option value="0">Beispiel ohne Empfänger</option>';
+  const options = recipients.map((r,i) => `<option value="${i}">${escapeHtml(r.name || r.email)}</option>`).join('') || '<option value="0">Example without recipient</option>';
   if (select.innerHTML !== options) select.innerHTML = options;
   select.value = String(previewIndex);
   const checks = [
-    [emailPattern.test(elements.accountEmail.value.trim()) && !!elements.appPassword.value.trim(),'Absender und Zugangsdaten eingetragen','Absenderkonto einrichten'],
-    [recipients.length > 0,`${recipients.length} Empfänger in der Liste`,'Empfänger hinzufügen'],
-    [!!elements.subject.value.trim(),'Betreff vorhanden','Betreff ergänzen'],
-    [!!elements.body.value.trim(),'Nachricht vorhanden','Nachricht schreiben'],
-    [elements.htmlBody.value.includes('{{content}}'),'Mail-Layout vorhanden','Layout mit {{content}} ergänzen']
+    [emailPattern.test(elements.accountEmail.value.trim()) && !!elements.appPassword.value.trim(),'Sender and credentials added','Set up sender account'],
+    [recipients.length > 0,`${recipients.length} recipients in the list`,'Add recipients'],
+    [!!elements.subject.value.trim(),'Subject added','Add a subject'],
+    [!!elements.body.value.trim(),'Email content added','Write your email'],
+    [elements.htmlBody.value.includes('{{content}}'),'Email layout added','Add {{content}} to the layout']
   ];
   document.querySelector('#sendChecklist').innerHTML = checks.map(([ok,yes,no])=>`<div class="${ok?'done':''}">${ok?'✓':'○'} &nbsp; ${escapeHtml(ok?yes:no)}</div>`).join('');
 }
@@ -1716,7 +1716,7 @@ function initStudio() {
     const validUrl=/^(https?:\/\/|mailto:)[^\s<>"']+$/i.test(target);
     const validVariable=recipientColumns.some(c=>c.key===target||c.label===target);
     if (!label || /[{},|]/.test(label) || /[{}]/.test(target) || !(validUrl || (linkKind==='button' && validVariable))) {
-      document.querySelector('#linkError').textContent='Bitte einen gültigen Link oder eine vorhandene Spaltenvariable verwenden. Die Beschriftung darf keine geschweiften Klammern, Kommas oder | enthalten.'; return;
+      document.querySelector('#linkError').textContent='Enter a valid link or existing column variable. The label cannot contain braces, commas, or |.'; return;
     }
     const html=linkKind==='button'?buttonChip(label,target,variant):`<a href="${escapeHtml(target)}">${escapeHtml(label)}</a>`;
     document.querySelector('#linkDialog').close();
@@ -1725,10 +1725,10 @@ function initStudio() {
   });
   document.querySelector('#deleteLink').addEventListener('click',()=>{if(editingButton)editingButton.remove();commitVisualEditor();document.querySelector('#linkDialog').close();});
   document.querySelectorAll('.design-controls input,.design-controls select').forEach(el=>el.addEventListener('input',()=>{
-    updateDesignPreview();document.querySelector('#designState').textContent='Auswahl · noch nicht angewendet';
+    updateDesignPreview();document.querySelector('#designState').textContent='Selection · not applied';
   }));
   document.querySelector('#applyDesign').addEventListener('click',()=>{
-    elements.htmlBody.value=buildDesignTemplate();updatePreview();queueAutosave();document.querySelector('#designState').textContent='Auf Entwurf angewendet';setStatus('Gestaltung auf diesen Entwurf angewendet.','ok');
+    elements.htmlBody.value=buildDesignTemplate();updatePreview();queueAutosave();document.querySelector('#designState').textContent='Applied to draft';setStatus('Design applied to this draft.','ok');
   });
   document.querySelector('#previewSelect').addEventListener('change',event=>{previewIndex=Number(event.target.value);updatePreview();});
   document.querySelector('#loadedContentPreview').addEventListener('click',()=>setPreviewImagesBlocked(false));
@@ -1747,7 +1747,7 @@ function initStudio() {
   });
   document.querySelector('#newDraft').addEventListener('click',()=>{
     clearTimeout(autosaveTimer);saveDraft();
-    const collection=readDraftCollection();let name='Neuer Entwurf';let i=2;while(collection[name])name=`Neuer Entwurf ${i++}`;
+    const collection=readDraftCollection();let name='New draft';let i=2;while(collection[name])name=`New draft ${i++}`;
     setSelectedDraftName(name);elements.draftName.value=name;elements.subject.value='';elements.body.value='<p>Hi {{firstName}},</p><p><br></p><p>Best,<br>The Social AI Club Team</p>';
     recipients=[];syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('message');elements.subject.focus();
   });
@@ -1755,7 +1755,7 @@ function initStudio() {
     clearTimeout(autosaveTimer);
     if(!loadDraft(false)){elements.subject.value='';elements.body.value='';recipients=[];syncRawRecipientsFromTable();updateTable();updatePreview();}
   });
-  document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key==='s'){event.preventDefault();saveDraft();setStatus('Entwurf gespeichert.','ok');}});
+  document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key==='s'){event.preventDefault();saveDraft();setStatus('Draft saved.','ok');}});
   syncStudio();updateDesignPreview();
 }
 
@@ -1779,13 +1779,13 @@ function setPreviewImagesBlocked(blocked) {
 
 function openLinkDialog(kind,button=null) {
   rememberEditorSelection();linkKind=kind;editingButton=button;
-  document.querySelector('#linkDialogTitle').textContent=kind==='button'?(button?'Button bearbeiten':'Button einfügen'):'Link einfügen';
+  document.querySelector('#linkDialogTitle').textContent=kind==='button'?(button?'Edit button':'Insert button'):'Insert link';
   document.querySelector('#linkLabel').value=button?.dataset.label||'';
   document.querySelector('#linkTarget').value=button?.dataset.target||'';
   document.querySelector('#buttonVariant').value=button?.dataset.variant||'gradient';
   document.querySelector('#buttonVariantField').hidden=kind!=='button';
   document.querySelector('#linkError').textContent='';
-  document.querySelector('#saveLink').textContent=button?'Übernehmen':'Einfügen';
+  document.querySelector('#saveLink').textContent=button?'Apply':'Insert';
   document.querySelector('#deleteLink').hidden=!button;
   document.querySelector('#linkDialog').showModal();
 }
