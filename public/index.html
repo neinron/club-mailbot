@@ -1,345 +1,22 @@
-<!doctype html>
-<html lang="de">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Club-Mailbot</title>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <main class="app-shell">
-      <aside class="sidebar">
-        <div class="brand-block">
-          <p class="eyebrow">Club-Mailbot</p>
-          <h1>Club-Mails als fokussierter Workflow.</h1>
-          <p class="lede">
-            Eine Arbeitsoberfläche für SMTP, Empfängerlisten, gespeicherte Entwürfe, Vorschau und Versand.
-          </p>
-        </div>
-
-        <nav class="page-nav" aria-label="Bereiche">
-          <button class="page-link active" type="button" data-page-target="overview">
-            <span>Übersicht</span>
-            <small>Status und Schnellzugriffe</small>
-          </button>
-          <button class="page-link" type="button" data-page-target="account">
-            <span>Account</span>
-            <small>Gmail, SMTP und Absender</small>
-          </button>
-          <button class="page-link" type="button" data-page-target="recipients">
-            <span>Empfänger</span>
-            <small>CSV importieren und prüfen</small>
-          </button>
-          <button class="page-link" type="button" data-page-target="message">
-            <span>Nachricht</span>
-            <small>Betreff und Mail-Inhalt</small>
-          </button>
-          <button class="page-link" type="button" data-page-target="design">
-            <span>Design</span>
-            <small>Feste Layout-Vorlage</small>
-          </button>
-          <button class="page-link" type="button" data-page-target="preview">
-            <span>Vorschau</span>
-            <small>Inhalt gegen Render prüfen</small>
-          </button>
-          <button class="page-link" type="button" data-page-target="send">
-            <span>Versand</span>
-            <small>Logs, Tests und Senden</small>
-          </button>
-        </nav>
-
-        <section class="sidebar-card">
-          <p class="eyebrow">Live</p>
-          <div class="mini-stats">
-            <div>
-              <strong id="summaryRecipientCount">0</strong>
-              <span>gültige Empfänger</span>
-            </div>
-            <div>
-              <strong id="summaryDraftCount">0</strong>
-              <span>gespeicherte Entwürfe</span>
-            </div>
-            <div>
-              <strong id="summaryReady">Nein</strong>
-              <span>sendebereit</span>
-            </div>
-          </div>
-        </section>
-      </aside>
-
-      <section class="workspace">
-        <header class="workspace-header">
-          <div>
-            <p class="eyebrow">Lokaler Gmail-Massenmailer</p>
-            <h2 id="workspaceTitle">Übersicht</h2>
-          </div>
-          <div id="status" class="status" role="status" aria-live="polite">
-            Bereit. Erst Empfänger prüfen, dann Test-Mail senden.
-          </div>
-        </header>
-
-        <section class="page active" data-page="overview">
-          <div class="hero-panel">
-            <div>
-              <p class="eyebrow">Workflow</p>
-              <h3>Alles an einem Ort, aber nicht mehr alles gleichzeitig.</h3>
-              <p>
-                Die App ist jetzt in klare Arbeitsbereiche aufgeteilt. Erst Account verbinden, dann Liste prüfen,
-                Nachricht bauen, Vorschau kontrollieren und schließlich versenden.
-              </p>
-            </div>
-            <div class="hero-actions">
-              <button type="button" class="secondary" data-page-target="account">Account einrichten</button>
-              <button type="button" class="ghost" data-page-target="message">Entwurf öffnen</button>
-            </div>
-          </div>
-
-          <div class="overview-grid">
-            <article class="overview-card">
-              <p class="eyebrow">Account</p>
-              <strong>SMTP-Verbindung testen</strong>
-              <p>Gmail-Adresse, Auth-Modus und Absendername verwalten.</p>
-              <button type="button" class="ghost" data-page-target="account">Zu Account</button>
-            </article>
-            <article class="overview-card">
-              <p class="eyebrow">Liste</p>
-              <strong>Empfänger sauber importieren</strong>
-              <p>CSV laden, Rohdaten einfügen und Dubletten direkt sehen.</p>
-              <button type="button" class="ghost" data-page-target="recipients">Zu Empfängern</button>
-            </article>
-            <article class="overview-card">
-              <p class="eyebrow">Nachricht</p>
-              <strong>Benannte Mail-Entwürfe speichern</strong>
-              <p>Betreff, Text und HTML als echte Vorlagen verwalten.</p>
-              <button type="button" class="ghost" data-page-target="message">Zu Entwürfen</button>
-            </article>
-            <article class="overview-card">
-              <p class="eyebrow">Versand</p>
-              <strong>Erst Vorschau, dann Versand</strong>
-              <p>Live-Preview, Test-Mail und SMTP-Logs in einem separaten Bereich.</p>
-              <button type="button" class="ghost" data-page-target="send">Zu Versand</button>
-            </article>
-          </div>
-        </section>
-
-        <section class="page" data-page="account">
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">1. Account</p>
-                <h3>Gmail verbinden</h3>
-              </div>
-              <span class="pill">SMTP</span>
-            </div>
-
-            <div class="form-grid two-col">
-              <label>
-                Gmail-Adresse
-                <input id="accountEmail" type="email" autocomplete="username" placeholder="name@example.com" />
-              </label>
-              <label>
-                Absendername
-                <input id="fromName" type="text" value="Club Team" placeholder="Club Team" />
-              </label>
-              <label>
-                Auth-Modus
-                <select id="authMode">
-                  <option value="appPassword">App-Passwort (AUTH PLAIN)</option>
-                  <option value="xoauth2">OAuth Access Token (XOAUTH2)</option>
-                </select>
-              </label>
-              <label>
-                SMTP TLS
-                <select id="smtpSecurity">
-                  <option value="ssl465">Port 465 SSL/TLS</option>
-                  <option value="starttls587">Port 587 STARTTLS</option>
-                </select>
-              </label>
-            </div>
-
-            <label>
-              <span id="secretLabel">App-Passwort</span>
-              <input id="appPassword" type="password" autocomplete="current-password" placeholder="16-stelliges App-Passwort" />
-            </label>
-
-            <p class="hint">Das App-Passwort bleibt nur in diesem Browser-Tab und wird nicht gespeichert.</p>
-
-            <div class="toolbar">
-              <button id="testAuthButton" class="ghost" type="button">Verbindung testen</button>
-              <button type="button" data-page-target="message">Weiter zu Nachricht</button>
-            </div>
-          </section>
-        </section>
-
-        <section class="page" data-page="recipients">
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">2. Empfänger</p>
-                <h3>Liste importieren und bereinigen</h3>
-              </div>
-              <span id="recipientCount" class="pill">0 gültig</span>
-            </div>
-
-            <div class="upload-zone">
-              <input id="csvFile" type="file" accept=".csv,text/csv" />
-              <div>
-                <strong>CSV hochladen</strong>
-                <span>Die erste Zeile wird als Datenzeile behandelt. Die Spaltenstruktur kommt aus der Tabelle unten.</span>
-              </div>
-            </div>
-
-            <label class="stack">
-              Inhaltszeilen einfügen
-              <textarea id="rawRecipients" rows="14" spellcheck="false">Max Mustermann, max@example.com
-Erika Musterfrau &lt;erika@example.com&gt;
-bewerbung@example.com</textarea>
-            </label>
-            <p class="hint">Hier nur Datenzeilen einfügen. Die Spalten, Variablen und Namen definierst du unten in der Tabelle. Komma, Semikolon oder Tab werden als Trennzeichen erkannt.</p>
-
-            <div class="toolbar">
-              <button id="parseButton" type="button">In Tabelle laden</button>
-              <button id="addRecipientButton" class="secondary" type="button">Zeile hinzufügen</button>
-              <button id="clearButton" class="ghost" type="button">Leeren</button>
-            </div>
-
-            <div class="form-grid two-col">
-              <label>
-                Tabellenname
-                <input id="tableName" type="text" value="Standardtabelle" placeholder="z. B. Bewerbungen Runde 1" />
-              </label>
-              <label>
-                Gespeicherte Tabellen
-                <select id="tableSelect">
-                  <option value="">Keine Tabellen gespeichert</option>
-                </select>
-              </label>
-            </div>
-
-            <div class="toolbar storage-actions">
-              <button id="saveTableButton" class="secondary" type="button">Tabelle speichern</button>
-              <button id="loadTableButton" class="ghost" type="button">Tabelle laden</button>
-              <button id="deleteTableButton" class="ghost" type="button">Tabelle löschen</button>
-            </div>
-
-            <p id="tableSaveStatus" class="save-status">Noch keine Tabelle gespeichert.</p>
-
-            <div class="quality">
-              <span id="duplicateCount">0 Duplikate</span>
-              <span id="invalidCount">0 ungültig</span>
-            </div>
-
-            <div class="table-wrap">
-              <table>
-                <thead id="recipientHead">
-                  <tr>
-                    <th>Name</th>
-                    <th>E-Mail</th>
-                    <th>Interview-Link</th>
-                    <th>Aktion</th>
-                    <th>+</th>
-                  </tr>
-                </thead>
-                <tbody id="recipientRows"></tbody>
-              </table>
-            </div>
-            <p class="hint">Platzhalter funktionieren für alle Spalten, z. B. <code>{{name}}</code>, <code>{{email}}</code>, <code>{{interviewLink}}</code>. Über die Auswahl im Spaltenkopf legst du fest, ob eine E-Mail-Spalte als <code>An</code>, <code>Cc</code>, <code>Bcc</code> oder <code>Reply-To</code> verwendet wird.</p>
-            <p id="recipientVariableWarning" class="hint"></p>
-          </section>
-        </section>
-
-        <section class="page" data-page="message">
-          <div class="page-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">3. Nachricht</p>
-                  <h3>Entwurf schreiben</h3>
-                </div>
-                <span id="messageVariableSummary" class="pill subtle">{{name}} {{firstName}} {{email}} {{interviewLink}}</span>
-              </div>
-
-              <div class="form-grid two-col">
-                <label>
-                  Entwurfsname
-                  <input id="draftName" type="text" value="Standardentwurf" placeholder="z. B. Reminder englisch" />
-                </label>
-                <label>
-                  Gespeicherte Entwürfe
-                  <select id="draftSelect">
-                    <option value="">Keine Entwürfe gespeichert</option>
-                  </select>
-                </label>
-              </div>
-
-              <div class="toolbar storage-actions">
-                <button id="saveDraftButton" class="secondary" type="button">Speichern</button>
-                <button id="loadDraftButton" class="ghost" type="button">Gespeicherte laden</button>
-                <button id="deleteDraftButton" class="ghost" type="button">Entwurf löschen</button>
-              </div>
-
-              <p id="saveStatus" class="save-status">Noch nichts gespeichert.</p>
-
-              <label>
-                Betreff
-                <input id="subject" type="text" value="Interview invitation from your club" />
-              </label>
-
-              <label class="stack">
-                Mail-Inhalt
-                <div class="variable-toolbar">
-                  <span class="variable-toolbar-label">Variablen</span>
-                  <div id="editorVariables" class="variable-chips"></div>
-                </div>
-                <textarea id="body" rows="22" spellcheck="false">&lt;h2&gt;Headline&lt;/h2&gt;
-&lt;p&gt;Hey {{firstName}},&lt;/p&gt;
-&lt;p&gt;We would like to invite you to the next step.&lt;/p&gt;
-button{{Continue Application,interviewLink}}
-&lt;p&gt;Best regards,&lt;br /&gt;&lt;strong&gt;Club Team&lt;/strong&gt;&lt;/p&gt;</textarea>
-              </label>
-
-              <p class="hint">Hier schreibst du direkt HTML. Variablen wie <code>{{firstName}}</code> werden ersetzt. Links schreibst du direkt als <code>&lt;a href="..."&gt;</code> oder über eine Variable im <code>href</code>. Buttons kannst du mit <code>button{{Text,interviewLink}}</code> schreiben.</p>
-              <div class="html-guide">
-                <strong>HTML-Formatierung</strong>
-                <code>&lt;h2&gt;Überschrift&lt;/h2&gt;</code>
-                <code>&lt;p&gt;Absatztext&lt;/p&gt;</code>
-                <code>&lt;strong&gt;fett&lt;/strong&gt;</code>
-                <code>&lt;br /&gt;</code>
-                <code>&lt;a href="https://example.com"&gt;Linktext&lt;/a&gt;</code>
-                <code>&lt;ul&gt;&lt;li&gt;Punkt&lt;/li&gt;&lt;/ul&gt;</code>
-                <code>button{{Button Text,interviewLink}}</code>
-              </div>
-
-              <div class="toolbar">
-                <button type="button" class="ghost" data-page-target="design">Zur Design-Vorlage</button>
-                <button type="button" data-page-target="preview">Zur Vorschau</button>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="preview-head">
-                <strong>Gerenderte HTML-Ansicht</strong>
-                <span id="messagePreviewRecipient">kein Empfänger</span>
-              </div>
-              <p id="messagePreviewSubject" class="preview-subject"></p>
-              <iframe id="messageHtmlPreview" title="Live HTML-Mail-Vorschau" sandbox=""></iframe>
-            </section>
-          </div>
-        </section>
-
-        <section class="page" data-page="design">
-          <section class="panel">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">4. Design</p>
-                <h3>Feste Mail-Vorlage</h3>
-              </div>
-              <span class="pill subtle">{{content}}</span>
-            </div>
-
-            <label class="stack">
-              Design-Vorlage
-              <textarea id="htmlBody" rows="24" spellcheck="false">&lt;!doctype html&gt;
+<!doctype html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mailbot · Social AI Club</title><link rel="stylesheet" href="/styles.css"></head><body>
+<main class="app-shell">
+<aside class="sidebar"><div class="brand"><img class="brand-logo" src="/assets/tum-social-club-logo.svg" alt="TUM Social AI Club"><h1>Mailbot</h1></div>
+<button id="newDraft" class="new-draft" type="button"><span>＋</span> Neuer Entwurf</button>
+<p class="nav-caption">ARBEITSBEREICH</p><nav class="page-nav" aria-label="Bereiche"><button type="button" class="page-link" data-page-target="message"><i aria-hidden="true">✎</i><span>Nachricht</span></button><button type="button" class="page-link" data-page-target="recipients"><i aria-hidden="true">◎</i><span>Empfänger</span></button><button type="button" class="page-link" data-page-target="design"><i aria-hidden="true">◧</i><span>Gestaltung</span></button><button type="button" class="page-link" data-page-target="preview"><i aria-hidden="true">▣</i><span>Vorschau</span></button><button type="button" class="page-link" data-page-target="send"><i aria-hidden="true">↗</i><span>Versand</span></button></nav><div class="drafts-heading"><p class="nav-caption">ENTWÜRFE</p><span id="summaryDraftCount">0</span></div><div id="sidebarDrafts" class="draft-list"></div>
+<div class="sidebar-bottom"><div class="local-note"><span class="status-dot"></span> Lokal gespeichert</div><button class="page-link" data-page-target="account" type="button" aria-label="Absender & Konto"><i aria-hidden="true">⚙</i><span>Absender & Konto</span></button></div></aside>
+<section class="workspace"><header class="workspace-header"><div class="breadcrumb">Arbeitsbereich <span>/</span> <h2 id="workspaceTitle">Nachricht</h2></div><button type="button" class="primary" data-page-target="send"><span>Versand prüfen</span> ↗</button></header>
+<div class="workspace-content"><div id="status" class="status" role="status" aria-live="polite">Entwurf bereit.</div>
+<section class="page" data-page="message"><div class="section-title"><div><p class="eyebrow">DEINE NÄCHSTE MAIL</p><h3>Nachricht verfassen</h3><p>Schreibe deine Nachricht. Die Vorschau wächst mit.</p></div><span class="autosave-tag">Automatisch gespeichert</span></div>
+<div class="draft-bar"><label>Entwurfsname<input id="draftName" value="Standardentwurf" placeholder="Name des Entwurfs"></label><details class="draft-options"><summary>Entwurf verwalten</summary><label>Gespeicherte Entwürfe<select id="draftSelect"></select></label><div class="toolbar"><button id="loadDraftButton">Laden</button><button id="saveDraftButton">Speichern</button><button id="deleteDraftButton" class="ghost">Löschen</button></div></details></div>
+<div class="compose-grid"><section class="editor-panel"><label class="subject-label">Betreff<input id="subject" placeholder="Worum geht es?" value=""></label>
+<div class="editor-top"><div class="segmented"><button id="visualMode" class="selected" type="button">Schreiben</button><button id="sourceMode" type="button">HTML</button></div><span id="messageVariableSummary" hidden></span><details class="variable-menu"><summary>＋ Personalisieren</summary><div id="editorVariables" class="variable-chips"></div></details></div>
+<div class="format-toolbar" id="formatToolbar" aria-label="Text formatieren"><button type="button" data-format="bold" aria-label="Fett"><b>B</b></button><button type="button" data-format="italic" aria-label="Kursiv"><em>I</em></button><button type="button" data-format="formatBlock" data-value="h2">Überschrift</button><button type="button" data-format="formatBlock" data-value="p">Text</button><button type="button" data-format="insertUnorderedList" aria-label="Aufzählung">☷</button><span></span><button type="button" id="insertLink">Link</button><button type="button" id="insertButton">＋ Button</button><button type="button" id="insertDivider" title="Horizontale Trennlinie einfügen">Trennlinie</button></div>
+<div id="visualEditor" contenteditable="true" role="textbox" aria-label="Nachricht schreiben" aria-multiline="true" spellcheck="true"></div><textarea id="body" rows="20" spellcheck="false" aria-label="Nachricht HTML" hidden>&lt;p&gt;Hi {{firstName}},&lt;/p&gt;&lt;p&gt;&lt;/p&gt;&lt;p&gt;Best,&lt;br&gt;The Social AI Club Team&lt;/p&gt;</textarea><p class="editor-footnote">Persönlich für jeden Empfänger. Buttons anklicken, um sie zu bearbeiten.</p><p id="saveStatus" class="save-status"></p></section>
+<section class="preview-panel"><div class="preview-head"><strong>Live-Vorschau</strong><span class="live-indicator">●</span></div><div class="preview-meta"><span id="messagePreviewRecipient"></span><p id="messagePreviewSubject"></p></div><div class="preview-canvas"><iframe id="messageHtmlPreview" title="Live-Mail-Vorschau" sandbox="allow-same-origin"></iframe></div></section></div></section>
+<section class="page" data-page="recipients"><div class="section-title"><div><p class="eyebrow">DEIN VERTEILER</p><h3>Empfänger verwalten</h3><p>Listen importieren, prüfen und für später speichern.</p></div><span id="recipientCount" class="pill">0 gültig</span></div>
+<section class="panel"><details class="import-section"><summary>＋ Empfänger importieren</summary><div class="upload-zone"><label>CSV-Datei auswählen<input id="csvFile" type="file" accept=".csv,text/csv"></label></div><label>Daten einfügen<textarea id="rawRecipients" rows="6" placeholder="Alex Example, alex@example.com"></textarea></label><p class="hint">Nur Datenzeilen, ohne Kopfzeile. Komma, Semikolon oder Tab trennen die Spalten.</p><button id="parseButton" class="primary">Importieren</button></details>
+<div class="form-grid two-col list-storage"><label>Listenname<input id="tableName" value="Standardtabelle"></label><label>Gespeicherte Listen<select id="tableSelect"></select></label></div><div class="toolbar"><button id="saveTableButton">Liste speichern</button><button id="loadTableButton" class="ghost">Laden</button><button id="deleteTableButton" class="ghost">Liste löschen</button><span class="toolbar-spacer"></span><button id="addRecipientButton">＋ Person</button><button id="clearButton" class="ghost">Leeren</button></div><p id="tableSaveStatus" class="save-status"></p><div class="quality"><span id="duplicateCount"></span><span id="invalidCount"></span></div><div class="table-wrap"><table><thead id="recipientHead"></thead><tbody id="recipientRows"></tbody></table></div><details class="help-details"><summary>Spalten & Personalisierung</summary><p class="hint">Spaltennamen sind als Platzhalter im Editor verfügbar. „An“ legt die Empfängeradresse fest; Cc, Bcc und Reply-To sind optional.</p><p id="recipientVariableWarning" class="hint"></p></details></section></section>
+<section class="page" data-page="design"><div class="section-title"><div><p class="eyebrow">DAS ÄUSSERE DEINER MAIL</p><h3>Mail gestalten</h3><p>Inhalt und Gestaltung bleiben unabhängig voneinander.</p></div></div><div class="design-grid"><section class="panel design-controls"><h4>Layout</h4><div class="layout-choices"><label><input type="radio" name="layout" value="letter" checked><span class="layout-mini letter-mini">Aa<hr><hr></span>Brief</label><label><input type="radio" name="layout" value="card"><span class="layout-mini card-mini">Aa<hr><hr></span>Karte</label></div><p class="hint">Das Clublogo erscheint automatisch im Kopf deiner E-Mail.</p><div class="form-grid two-col"><label>Akzentfarbe<input id="designAccent" type="color" value="#0a2d57"></label><label>Hintergrund<input id="designBackground" type="color" value="#f5f5f4"></label></div><label>Schrift<select id="designFont"><option value="Arial,Helvetica,sans-serif">Klar · Sans Serif</option><option value="Georgia,serif">Klassisch · Serif</option></select></label><label>Innenabstand <output id="paddingValue">32 px</output><input id="designPadding" type="range" min="16" max="56" step="4" value="32"></label><label>Mailbreite<select id="designWidth"><option value="600">Standard · 600 px</option><option value="520">Kompakt · 520 px</option><option value="680">Breit · 680 px</option></select></label><button id="applyDesign" class="primary">Auf Entwurf anwenden</button><p class="hint">Die Vorschau zeigt deine Auswahl. Erst „Anwenden“ ersetzt das gespeicherte Layout.</p><details class="help-details"><summary>Eigene HTML-Vorlage</summary><label>Design-Vorlage<textarea id="htmlBody" rows="12" spellcheck="false">&lt;!doctype html&gt;
 &lt;html lang="en"&gt;
   &lt;head&gt;
     &lt;meta charset="utf-8"&gt;
@@ -364,7 +41,7 @@ button{{Continue Application,interviewLink}}
 
       @media screen and (max-width: 600px) {
         h1 { font-size: 28px !important; }
-        .logo-container { padding: 12px 20px !important; }
+        .logo-container { height: 66px !important; padding: 0 16px !important; }
         .content-padding { padding: 24px 20px !important; }
       }
 
@@ -387,15 +64,11 @@ button{{Continue Application,interviewLink}}
         &lt;td bgcolor="#ffffff" class="force-white" style="padding:24px 12px;background:#ffffff;"&gt;
           &lt;table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#ffffff" class="force-white" style="max-width:600px;margin:0 auto;background:#ffffff;"&gt;
             &lt;tr&gt;
-              &lt;td bgcolor="#ffffff" class="force-white" style="padding:0 0 14px;background:#ffffff;"&gt;
-                &lt;table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#ffffff" class="force-white" style="background:#ffffff;border:1px solid rgba(10,45,87,0.10);border-radius:24px;box-shadow:0 12px 28px rgba(10,45,87,0.16);"&gt;
+              &lt;td bgcolor="#ffffff" class="force-white" style="padding:0 0 16px;background:#ffffff;"&gt;
+                &lt;table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#ffffff" class="force-white" style="height:66px;background:#ffffff;border:1px solid rgba(10,45,87,0.10);border-radius:24px;border-collapse:separate;overflow:hidden;box-shadow:0 4px 12px rgba(10,45,87,0.06);"&gt;
                   &lt;tr&gt;
-                    &lt;td bgcolor="#ffffff" class="logo-container force-white" style="padding:24px 20px;vertical-align:middle;background:#ffffff;border-radius:24px;"&gt;
-                      &lt;div class="force-white" style="max-width:80%;width:100%;background:#ffffff;"&gt;
-                        &lt;div style="font-family:'League Spartan',Arial,Helvetica,sans-serif;font-size:28px;line-height:1;font-weight:800;color:#0a2d57;letter-spacing:0;"&gt;
-                          Club-Mailbot
-                        &lt;/div&gt;
-                      &lt;/div&gt;
+                    &lt;td bgcolor="#ffffff" class="logo-container force-white" height="66" style="height:66px;padding:0 16px;vertical-align:middle;background:#ffffff;border-radius:24px;"&gt;
+                      &lt;img src="https://tum-socialaiclub.de/assets/logos/LOGO_V6-ICON%2BTUM_SOCIAL_CLUB-single_line-dark_text.svg" width="320" alt="TUM Social AI Club" style="display:block;width:320px;max-width:100%;height:auto;border:0;"&gt;
                     &lt;/td&gt;
                   &lt;/tr&gt;
                 &lt;/table&gt;
@@ -403,7 +76,7 @@ button{{Continue Application,interviewLink}}
             &lt;/tr&gt;
 
             &lt;tr&gt;
-              &lt;td bgcolor="#ffffff" class="force-white" style="background:#ffffff;border:1px solid rgba(10,45,87,0.08);border-radius:26px;overflow:hidden;box-shadow:0 18px 48px rgba(10,45,87,0.10);"&gt;
+              &lt;td bgcolor="#ffffff" class="force-white" style="background:#ffffff;border:1px solid rgba(10,45,87,0.08);border-radius:24px;overflow:hidden;box-shadow:0 8px 20px rgba(10,45,87,0.06);"&gt;
                 &lt;table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#ffffff" class="force-white" style="background:#ffffff;"&gt;
                   &lt;tr&gt;
                     &lt;td bgcolor="#ffffff" class="content-padding force-white" style="padding:36px 42px 40px;background:#ffffff;"&gt;
@@ -418,80 +91,9 @@ button{{Continue Application,interviewLink}}
       &lt;/tr&gt;
     &lt;/table&gt;
   &lt;/body&gt;
-&lt;/html&gt;</textarea>
-            </label>
-
-            <p class="hint">
-              Die Design-Vorlage ist das feste Grundlayout. In `Mail-Inhalt` kommt nur der variable Inhalt hinein.
-              Die Vorlage enthält absichtlich keinen eigenen Titel und keinen Footer-Text. Der Text-Fallback wird automatisch aus `Mail-Inhalt` erzeugt.
-            </p>
-
-            <div class="toolbar">
-              <button type="button" class="ghost" data-page-target="message">Zur Nachricht</button>
-              <button type="button" data-page-target="preview">Zur Vorschau</button>
-            </div>
-          </section>
-        </section>
-
-        <section class="page" data-page="preview">
-          <div class="page-grid">
-            <section class="panel">
-              <div class="preview-head">
-                <strong>Mail-Inhalt</strong>
-                <span id="previewRecipient">kein Empfänger</span>
-              </div>
-              <p class="preview-subject">HTML-Inhalt mit Platzhaltern</p>
-              <textarea id="previewBody" rows="24" spellcheck="false"></textarea>
-            </section>
-
-            <section class="panel">
-              <div class="preview-head">
-                <strong>Gerenderte Mail</strong>
-                <span>gerendert wie eine Mail</span>
-              </div>
-              <p id="previewSubject" class="preview-subject"></p>
-              <iframe id="htmlPreview" title="HTML-Mail-Vorschau" sandbox=""></iframe>
-            </section>
-          </div>
-        </section>
-
-        <section class="page" data-page="send">
-          <div class="page-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="eyebrow">4. Versand</p>
-                  <h3>Testen und senden</h3>
-                </div>
-                <span class="pill">Live</span>
-              </div>
-
-              <div class="send-controls">
-                <label>
-                  Pause zwischen Mails
-                  <select id="delayMs">
-                    <option value="1200">1,2 Sekunden</option>
-                    <option value="2500">2,5 Sekunden</option>
-                    <option value="5000">5 Sekunden</option>
-                  </select>
-                </label>
-                <button id="testButton" type="button" class="secondary">Test an ersten Empfänger</button>
-                <button id="sendButton" type="button">Alle senden</button>
-              </div>
-            </section>
-
-            <section class="panel log-panel" aria-labelledby="log-title">
-              <div class="preview-head">
-                <strong id="log-title">SMTP-Logs</strong>
-                <button id="clearLogsButton" class="ghost mini-button" type="button">Logs leeren</button>
-              </div>
-              <pre id="smtpLogs">Noch keine SMTP-Logs. Nutze "Verbindung testen" oder sende eine Test-Mail.</pre>
-            </section>
-          </div>
-        </section>
-      </section>
-    </main>
-
-    <script type="module" src="/app.js"></script>
-  </body>
-</html>
+&lt;/html&gt;</textarea></label><p class="hint">Die Vorlage muss {{content}} enthalten. Dort wird deine Nachricht eingesetzt.</p></details></section><section class="preview-panel"><div class="preview-head"><strong>Design-Vorschau</strong><span id="designState">Auswahl · noch nicht angewendet</span></div><div class="preview-canvas"><iframe id="designPreview" title="Design-Vorschau" sandbox="allow-same-origin"></iframe></div></section></div></section>
+<section class="page" data-page="preview"><div class="section-title"><div><p class="eyebrow">DER LETZTE BLICK</p><h3>Vorschau prüfen</h3><p>Prüfe die Personalisierung und die Ansicht auf kleinen Bildschirmen.</p></div><div class="preview-toolbar"><div class="preview-toolbar-group"><span class="preview-toolbar-label">Gerät</span><div class="segmented"><button id="desktopPreview" class="selected">Desktop</button><button id="mobilePreview">Mobil</button></div></div><div class="preview-toolbar-group"><span class="preview-toolbar-label">Bilder</span><div class="segmented"><button id="loadedContentPreview" class="selected">Geladen</button><button id="blockedContentPreview">Blockiert</button></div></div></div></div><div class="preview-controls"><label>Vorschau für<select id="previewSelect"></select></label><span id="previewRecipient"></span></div><p id="previewSubject" class="preview-subject"></p><textarea id="previewBody" hidden></textarea><div class="full-preview"><div id="blockedPreviewNotice" class="blocked-preview-notice" hidden><span>Externe Bilder sind zum Schutz deiner Privatsphäre blockiert.</span><button id="showPreviewImages" type="button">Bilder anzeigen</button></div><iframe id="htmlPreview" title="HTML-Mail-Vorschau" sandbox="allow-same-origin"></iframe></div></section>
+<section class="page" data-page="account"><div class="section-title"><div><p class="eyebrow">VERBINDUNG</p><h3>Absender & Konto</h3><p>Verbinde das Gmail-Konto, mit dem du senden möchtest.</p></div></div><section class="panel account-panel"><div class="form-grid two-col"><label>Gmail-Adresse<input id="accountEmail" type="email" autocomplete="username" placeholder="contact@example.com"></label><label>Absendername<input id="fromName" value="Social AI Club"></label></div><label><span id="secretLabel">App-Passwort</span><input id="appPassword" type="password" autocomplete="current-password" placeholder="16-stelliges App-Passwort"></label><p class="hint">Bleibt nur in diesem Tab. Wird nicht gespeichert.</p><details class="help-details"><summary>Erweiterte Verbindungseinstellungen</summary><div class="form-grid two-col"><label>Anmeldung<select id="authMode"><option value="appPassword">App-Passwort</option><option value="xoauth2">OAuth Access Token</option></select></label><label>Verbindung<select id="smtpSecurity"><option value="ssl465">Port 465 · SSL/TLS</option><option value="starttls587">Port 587 · STARTTLS</option></select></label></div></details><button id="testAuthButton" class="primary">Verbindung testen</button></section></section>
+<section class="page" data-page="send"><div class="section-title"><div><p class="eyebrow">BEREIT, WENN DU ES BIST</p><h3>Versand vorbereiten</h3><p>Eine persönliche Mail pro Empfänger.</p></div></div><section class="panel send-panel"><div class="send-summary"><div><span>Empfänger</span><strong id="summaryRecipientCount">0</strong></div><div><span>Versandbereit</span><strong id="summaryReady">Nein</strong></div></div><div id="sendChecklist" class="send-checklist"></div><div class="form-grid two-col"><label>Testadresse<input id="testEmail" type="email" placeholder="Deine eigene E-Mail-Adresse"></label><label>Pause zwischen Mails<select id="delayMs"><option value="1200">1,2 Sekunden</option><option value="2500">2,5 Sekunden</option><option value="5000">5 Sekunden</option></select></label></div><p class="hint">Die Testmail verwendet die Personalisierung des ausgewählten Empfängers, geht aber ausschließlich an die Testadresse.</p><div class="toolbar"><button id="testButton">Testmail senden</button><button id="sendButton" class="primary">An alle senden ↗</button></div><details class="help-details"><summary>Versandprotokoll</summary><div class="preview-head"><strong>Verbindungsdetails</strong><button id="clearLogsButton" class="ghost">Leeren</button></div><pre id="smtpLogs">Noch kein Versand gestartet.</pre></details></section></section>
+</div><footer class="workspace-footer"><span>Mailbot <span class="muted">/</span> Social AI Club</span><span>Entwürfe bleiben in diesem Browser</span></footer></section></main>
+<dialog id="linkDialog"><form method="dialog" id="linkForm"><div class="preview-head"><h3 id="linkDialogTitle">Button einfügen</h3><button value="cancel" formnovalidate class="ghost" aria-label="Schließen">×</button></div><label>Beschriftung<input id="linkLabel" required></label><label>Link oder Empfängervariable<input id="linkTarget" required placeholder="https://… oder interviewLink"></label><label id="buttonVariantField" hidden>Button-Stil<select id="buttonVariant"><option value="gradient">Gradient · Mint & Azure</option><option value="primary">Primary · Dunkelblau</option><option value="secondary">Secondary · Weiß mit Rahmen</option><option value="white">White · Weiß</option><option value="tertiary">Tertiary · Kontur</option><option value="glass">Glass · Transparent</option></select></label><p id="linkError" class="hint"></p><div class="toolbar"><button id="deleteLink" type="button" class="ghost" hidden>Entfernen</button><span class="toolbar-spacer"></span><button value="cancel" formnovalidate>Abbrechen</button><button id="saveLink" value="save" class="primary">Einfügen</button></div></form></dialog><script type="module" src="/app.js"></script></body></html>

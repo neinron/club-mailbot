@@ -108,17 +108,28 @@ function resolveButtonTarget(rawTarget, recipient, columns = []) {
   return String(resolveTemplateVariable(target, recipient, columns) || "").trim();
 }
 
-function renderButtonMarkup(rawLabel, rawTarget, recipient, columns = [], mode = "html") {
+function renderButtonMarkup(rawLabel, rawTarget, recipient, columns = [], mode = "html", variant = "gradient") {
   const label = renderTemplate(String(rawLabel || "").trim(), recipient, columns);
   const href = renderTemplate(resolveButtonTarget(rawTarget, recipient, columns), recipient, columns);
   if (!href) return mode === "html" ? "" : label;
   if (mode === "text") {
     return `${label}: ${href}`;
   }
+  const buttonStyles = {
+    gradient: { background: "#c4dfff", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "background-image:radial-gradient(circle at 18% 24%,rgba(75,255,192,.5),transparent 42%),radial-gradient(circle at 82% 72%,rgba(74,152,255,.68),transparent 48%),linear-gradient(120deg,#DEECFF 0%,#c4dfff 42%,#a8ceff 72%,#DEECFF 100%);box-shadow:0 4px 10px rgba(10,45,87,.12);" },
+    primary: { background: "#0a2d57", color: "#ffffff", radius: 16, padding: "14px 22px", weight: 700, effects: "box-shadow:0 4px 6px rgba(10,45,87,.18);" },
+    secondary: { background: "#ffffff", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid rgba(10,45,87,.1);box-shadow:0 4px 6px rgba(10,45,87,.1);" },
+    white: { background: "#ffffff", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid #e2e8f0;box-shadow:0 1px 3px rgba(10,45,87,.08);" },
+    tertiary: { background: "transparent", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid rgba(10,45,87,.25);" },
+    glass: { background: "rgba(255,255,255,.85)", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid rgba(10,45,87,.1);box-shadow:0 4px 6px rgba(10,45,87,.1);" },
+  };
+  const style = buttonStyles[variant] || buttonStyles.gradient;
+  const buttonStyle = `display:inline-block;color:${style.color};text-decoration:none;border-radius:${style.radius}px;padding:${style.padding};font-weight:${style.weight};font-size:16px;line-height:1.2;background-color:${style.background};${style.effects}`;
+  const cellStyle = `border-radius:${style.radius}px;background-color:${style.background};`;
   return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 32px;">
   <tr>
-    <td style="border-radius:12px;background-color:#0a2d57;background:#0a2d57;">
-      <a href="${href}" data-club-mailbot-button="true" style="display:inline-block;color:#ffffff;text-decoration:none;border-radius:12px;padding:14px 24px;font-weight:800;font-size:16px;line-height:1.1;background:#0a2d57;">
+    <td style="${cellStyle}">
+      <a href="${href}" data-club-mailbot-button="true" data-club-mailbot-variant="${variant}" style="${buttonStyle}">
         ${label}
       </a>
     </td>
@@ -179,7 +190,9 @@ function tokenPlaceholder(index) {
 
 function renderVariableValue(rawKey, recipient, columns = []) {
   const key = String(rawKey || "").trim();
-  const value = resolveTemplateVariable(key, recipient, columns);
+  const value = ["firstName", "lastName"].includes(key)
+    ? renderTemplate(`{{${key}}}`, recipient, columns)
+    : resolveTemplateVariable(key, recipient, columns);
   const text = String(value || "").trim();
   if (!text) return "";
   if (/^https?:\/\//i.test(text)) {
@@ -199,11 +212,11 @@ function renderHtmlContent(template, recipient, columns = []) {
   };
 
   let working = String(template || "");
-  working = working.replace(/\{\{\s*button\s*:\s*([^|}]+)\|\s*([^}]+)\s*\}\}/gi, (_, rawLabel, rawTarget) => (
-    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, columns, "html"))
+  working = working.replace(/\{\{\s*button\s*:\s*([^|}]+)\|\s*([^|}]+?)(?:\|\s*([a-z]+))?\s*\}\}/gi, (_, rawLabel, rawTarget, variant) => (
+    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, columns, "html", variant || "gradient"))
   ));
-  working = working.replace(/button\{\{\s*([^,}]+)\s*,\s*([^}]+)\s*\}\}/gi, (_, rawLabel, rawTarget) => (
-    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, columns, "html"))
+  working = working.replace(/button\{\{\s*([^,}]+)\s*,\s*([^,}]+?)(?:\s*,\s*([a-z]+))?\s*\}\}/gi, (_, rawLabel, rawTarget, variant) => (
+    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, columns, "html", variant || "gradient"))
   ));
   working = working.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, rawKey) => pushToken(renderVariableValue(rawKey, recipient, columns)));
   return working.replace(/%%MAILBOTE_TOKEN_(\d+)%%/g, (_, rawIndex) => tokens[Number(rawIndex)] || "");
@@ -219,7 +232,12 @@ function renderHtmlMessage(designTemplate, contentTemplate, recipient, columns =
       )
     )
   );
-  return renderTemplate(String(designTemplate || "").replaceAll("{{content}}", contentHtml), recipient, columns);
+  let result = renderTemplate(String(designTemplate || "").replaceAll("{{content}}", contentHtml), recipient, columns);
+  const accent = String(designTemplate).match(/data-mail-accent="(#[0-9a-f]{6})"/i)?.[1];
+  const font = String(designTemplate).match(/data-mail-font="(serif|sans)"/)?.[1];
+  if (accent) result = result.replaceAll("#0a2d57", accent);
+  if (font === "serif") result = result.replaceAll("'Albert Sans',Arial,Helvetica,sans-serif", "Georgia,serif").replaceAll("'League Spartan',Arial,Helvetica,sans-serif", "Georgia,serif");
+  return result;
 }
 
 function normalizeHtmlBody(value) {
@@ -322,12 +340,22 @@ async function handleSend(req, res) {
       return sendJson(res, 400, { error: `Maximal ${maxRecipients} Empfänger pro Lauf.` });
     }
 
-    const selectedRecipients = payload.testOnly ? recipients.slice(0, 1) : recipients;
+    const testEmail = String(payload.testEmail || "").trim();
+    if (payload.testOnly && !emailPattern.test(testEmail)) {
+      return sendJson(res, 400, { error: "Eine gültige Testadresse fehlt." });
+    }
+    if (!String(payload.htmlBody || "").includes("{{content}}")) {
+      return sendJson(res, 400, { error: "Die Design-Vorlage muss {{content}} enthalten." });
+    }
+    const previewIndex = Math.max(0, Math.min(recipients.length - 1, Number(payload.previewIndex) || 0));
+    const selectedRecipients = payload.testOnly ? [recipients[Math.floor(previewIndex)]] : recipients;
     const results = [];
 
     for (const [index, recipient] of selectedRecipients.entries()) {
       try {
-        const addresses = collectMessageAddresses(recipient, recipientColumns);
+        const addresses = payload.testOnly
+          ? { to: [testEmail], cc: [], bcc: [], replyTo: [] }
+          : collectMessageAddresses(recipient, recipientColumns);
         if (!addresses.to.length) {
           throw new Error("Keine Empfängeradresse mit Rolle 'An' gefunden.");
         }
@@ -353,7 +381,7 @@ async function handleSend(req, res) {
           body: plainBody,
           htmlBody
         });
-        results.push({ email: recipient.email, name: recipient.name, ok: true, trace: sendResult.trace });
+        results.push({ email: payload.testOnly ? testEmail : recipient.email, name: recipient.name, ok: true, trace: sendResult.trace });
       } catch (error) {
         const serialized = serializeError(error);
         results.push({ email: recipient.email, name: recipient.name, ok: false, error: serialized.message, trace: serialized.trace });

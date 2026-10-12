@@ -1,9 +1,18 @@
+let studioReady = false;
+let editorMode = "visual";
+let previewIndex = 0;
+let previewImagesBlocked = false;
+let savedEditorRange = null;
+let editingButton = null;
+let linkKind = "button";
+let sending = false;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const draftCollectionStorageKey = "club-mailbot.drafts.v1";
 const selectedDraftStorageKey = "club-mailbot.selected-draft.v1";
 const tableCollectionStorageKey = "club-mailbot.tables.v1";
 const selectedTableStorageKey = "club-mailbot.selected-table.v1";
 const autosaveDelayMs = 500;
+const clubEmailLogoUrl = "https://tum-socialaiclub.de/assets/logos/LOGO_V6-ICON%2BTUM_SOCIAL_CLUB-single_line-dark_text.svg";
 const defaultRecipientColumns = [
   { key: "name", label: "Name", role: "text" },
   { key: "email", label: "E-Mail", role: "to" },
@@ -74,6 +83,8 @@ let autosaveTimer = null;
 let isHydratingDraft = false;
 
 function activatePage(pageName) {
+  if (pageName === "design" && studioReady) updateDesignPreview();
+  document.querySelectorAll(".page-nav .page-link").forEach(link => link.setAttribute("aria-current", link.dataset.pageTarget === pageName ? "page" : "false"));
   elements.pages.forEach((page) => {
     page.classList.toggle("active", page.dataset.page === pageName);
   });
@@ -84,7 +95,7 @@ function activatePage(pageName) {
 
   const activeLink = elements.pageLinks.find((link) => link.dataset.pageTarget === pageName);
   if (elements.workspaceTitle && activeLink) {
-    elements.workspaceTitle.textContent = activeLink.querySelector("span")?.textContent || "Club-Mailbot";
+    elements.workspaceTitle.textContent = activeLink.querySelector("span")?.textContent || "Mailbot";
   }
 }
 
@@ -347,17 +358,28 @@ function resolveButtonTarget(rawTarget, recipient, columns = recipientColumns) {
   return String(resolveTemplateVariable(target, ensureRequiredRecipientFields(recipient || {}), columns) || "").trim();
 }
 
-function renderButtonMarkup(rawLabel, rawTarget, recipient, mode = "html") {
+function renderButtonMarkup(rawLabel, rawTarget, recipient, mode = "html", variant = "gradient") {
   const label = renderTemplate(String(rawLabel || "").trim(), recipient);
   const href = renderTemplate(resolveButtonTarget(rawTarget, recipient), recipient);
   if (!href) return mode === "html" ? "" : label;
   if (mode === "text") {
     return `${label}: ${href}`;
   }
+  const buttonStyles = {
+    gradient: { background: "#c4dfff", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "background-image:radial-gradient(circle at 18% 24%,rgba(75,255,192,.5),transparent 42%),radial-gradient(circle at 82% 72%,rgba(74,152,255,.68),transparent 48%),linear-gradient(120deg,#DEECFF 0%,#c4dfff 42%,#a8ceff 72%,#DEECFF 100%);box-shadow:0 4px 10px rgba(10,45,87,.12);" },
+    primary: { background: "#0a2d57", color: "#ffffff", radius: 16, padding: "14px 22px", weight: 700, effects: "box-shadow:0 4px 6px rgba(10,45,87,.18);" },
+    secondary: { background: "#ffffff", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid rgba(10,45,87,.1);box-shadow:0 4px 6px rgba(10,45,87,.1);" },
+    white: { background: "#ffffff", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid #e2e8f0;box-shadow:0 1px 3px rgba(10,45,87,.08);" },
+    tertiary: { background: "transparent", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid rgba(10,45,87,.25);" },
+    glass: { background: "rgba(255,255,255,.85)", color: "#0a2d57", radius: 16, padding: "14px 22px", weight: 700, effects: "border:1px solid rgba(10,45,87,.1);box-shadow:0 4px 6px rgba(10,45,87,.1);" },
+  };
+  const style = buttonStyles[variant] || buttonStyles.gradient;
+  const buttonStyle = `display:inline-block;color:${style.color};text-decoration:none;border-radius:${style.radius}px;padding:${style.padding};font-weight:${style.weight};font-size:16px;line-height:1.2;background-color:${style.background};${style.effects}`;
+  const cellStyle = `border-radius:${style.radius}px;background-color:${style.background};`;
   return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 32px;">
   <tr>
-    <td style="border-radius:12px;background-color:#0a2d57;background:#0a2d57;">
-      <a href="${escapeHtml(href)}" data-club-mailbot-button="true" style="display:inline-block;color:#ffffff;text-decoration:none;border-radius:12px;padding:14px 24px;font-weight:800;font-size:16px;line-height:1.1;background:#0a2d57;">
+    <td style="${cellStyle}">
+      <a href="${escapeHtml(href)}" data-club-mailbot-button="true" data-club-mailbot-variant="${variant}" style="${buttonStyle}">
         ${escapeHtml(label)}
       </a>
     </td>
@@ -377,6 +399,18 @@ function normalizeAnchorTargets(html, recipient) {
   return String(html || "").replace(/href=(["'])([^"']+)\1/gi, (_, quote, rawHref) => {
     const href = normalizeLinkTarget(rawHref, recipient);
     return `href=${quote}${escapeHtml(href || rawHref)}${quote}`;
+  });
+}
+
+function previewHtmlWithBlockedImages(html) {
+  if (!previewImagesBlocked) return html;
+  return String(html || "").replace(/<img\b([^>]*?)\/?\s*>/gi, (_match, attrs) => {
+    const alt = attrs.match(/\balt\s*=\s*(["'])(.*?)\1/i)?.[2] || "Externes Bild";
+    const rawWidth = Number(attrs.match(/\bwidth\s*=\s*(["']?)(\d+)/i)?.[2]);
+    const rawHeight = Number(attrs.match(/\bheight\s*=\s*(["']?)(\d+)/i)?.[2]);
+    const width = rawWidth > 0 ? Math.min(rawWidth, 640) : 320;
+    const height = rawHeight > 0 ? Math.min(rawHeight, 240) : 64;
+    return `<span role="img" aria-label="${escapeHtml(alt)} · blockiert" style="display:block;width:${width}px;max-width:100%;height:${height}px;line-height:${height}px;overflow:hidden;text-align:center;border:1px dashed #aeb9c3;border-radius:8px;background:#f1f4f5;color:#66707a;font:12px Arial,Helvetica,sans-serif;">▧ ${escapeHtml(alt)} · blockiert</span>`;
   });
 }
 
@@ -418,7 +452,7 @@ function tokenPlaceholder(index) {
 
 function renderVariableValue(rawKey, recipient) {
   const key = String(rawKey || "").trim();
-  const value = resolveTemplateVariable(key, ensureRequiredRecipientFields(recipient || {}));
+  const value = ["firstName", "lastName"].includes(key) ? renderTemplate(`{{${key}}}`, recipient) : resolveTemplateVariable(key, ensureRequiredRecipientFields(recipient || {}));
   const text = String(value || "").trim();
   if (!text) return "";
   if (/^https?:\/\//i.test(text)) {
@@ -438,11 +472,11 @@ function renderHtmlContent(template, recipient) {
   };
 
   let working = String(template || "");
-  working = working.replace(/\{\{\s*button\s*:\s*([^|}]+)\|\s*([^}]+)\s*\}\}/gi, (_, rawLabel, rawTarget) => (
-    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, "html"))
+  working = working.replace(/\{\{\s*button\s*:\s*([^|}]+)\|\s*([^|}]+?)(?:\|\s*([a-z]+))?\s*\}\}/gi, (_, rawLabel, rawTarget, variant) => (
+    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, "html", variant || "gradient"))
   ));
-  working = working.replace(/button\{\{\s*([^,}]+)\s*,\s*([^}]+)\s*\}\}/gi, (_, rawLabel, rawTarget) => (
-    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, "html"))
+  working = working.replace(/button\{\{\s*([^,}]+)\s*,\s*([^,}]+?)(?:\s*,\s*([a-z]+))?\s*\}\}/gi, (_, rawLabel, rawTarget, variant) => (
+    pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, "html", variant || "gradient"))
   ));
   working = working.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, rawKey) => pushToken(renderVariableValue(rawKey, recipient)));
   return working.replace(/%%MAILBOTE_TOKEN_(\d+)%%/g, (_, rawIndex) => tokens[Number(rawIndex)] || "");
@@ -457,11 +491,20 @@ function renderHtmlMessage(designTemplate, contentTemplate, recipient) {
       )
     )
   );
-  return renderTemplate(String(designTemplate || "").replaceAll("{{content}}", contentHtml), recipient);
+  let result = renderTemplate(String(designTemplate || "").replaceAll("{{content}}", contentHtml), recipient);
+  const accent = String(designTemplate).match(/data-mail-accent="(#[0-9a-f]{6})"/i)?.[1];
+  const font = String(designTemplate).match(/data-mail-font="(serif|sans)"/)?.[1];
+  if (accent) result = result.replaceAll("#0a2d57", accent);
+  if (font === "serif") result = result.replaceAll("'Albert Sans',Arial,Helvetica,sans-serif", "Georgia,serif").replaceAll("'League Spartan',Arial,Helvetica,sans-serif", "Georgia,serif");
+  return result;
 }
 
 function insertVariableAtCursor(variableName) {
   const placeholder = `{{${variableName}}}`;
+  if (studioReady && editorMode === "visual") {
+    insertEditorHtml(escapeHtml(placeholder));
+    return;
+  }
   const start = elements.body.selectionStart ?? elements.body.value.length;
   const end = elements.body.selectionEnd ?? start;
   const value = elements.body.value;
@@ -592,6 +635,7 @@ function collectDraft() {
     body: elements.body.value,
     htmlBody: elements.htmlBody.value,
     delayMs: elements.delayMs.value,
+    designSettings: studioReady ? readDesignSettings() : undefined,
     savedAt: new Date().toISOString()
   };
 }
@@ -632,6 +676,7 @@ function getSelectedDraftName() {
 
 function updateDraftSelectOptions(selectedName = "") {
   const collection = readDraftCollection();
+  renderSidebarDrafts(collection, selectedName);
   const names = Object.keys(collection).sort((left, right) => left.localeCompare(right, "de"));
   const fallback = names.length ? names[0] : "";
   const activeName = selectedName && collection[selectedName] ? selectedName : fallback;
@@ -723,6 +768,12 @@ function saveDraft() {
   const draft = collectDraft();
   try {
     const collection = readDraftCollection();
+    const previousName = getSelectedDraftName();
+    if (previousName !== draft.draftName && collection[draft.draftName]) {
+      setSaveStatus("Dieser Entwurfsname existiert bereits. Bitte einen anderen Namen wählen.");
+      return false;
+    }
+    if (previousName !== draft.draftName) delete collection[previousName];
     collection[draft.draftName] = draft;
     writeDraftCollection(collection);
     updateDraftSelectOptions(draft.draftName);
@@ -858,8 +909,10 @@ function applyDraft(draft, showStatus = true) {
     elements.fromName.value = draft.fromName || "Club Team";
     elements.subject.value = draft.subject || "";
     elements.body.value = draft.body || "";
-    elements.htmlBody.value = draft.htmlBody || "";
+    elements.htmlBody.value = withClubLogo(draft.htmlBody || "");
     elements.delayMs.value = draft.delayMs || "1200";
+    restoreDesignSettings(draft.designSettings);
+    previewIndex = 0;
 
     if (Array.isArray(draft.recipients) && draft.recipients.length) {
       hydrateRecipientData(draft.recipientColumns, draft.recipients);
@@ -1134,8 +1187,9 @@ function updateTable() {
 }
 
 function updatePreview() {
-  const recipient = recipients[0];
-  const renderedHtml = renderHtmlMessage(elements.htmlBody.value, elements.body.value, recipient);
+  previewIndex = Math.min(previewIndex, Math.max(0, recipients.length - 1));
+  const recipient = recipients[previewIndex];
+  const renderedHtml = renderHtmlMessage(elements.htmlBody.value, elements.body.value, recipient || {name:"Alex Example",email:"alex@example.com"});
   if (elements.messagePreviewRecipient) {
     elements.messagePreviewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "kein Empfänger";
   }
@@ -1143,27 +1197,47 @@ function updatePreview() {
     elements.messagePreviewSubject.textContent = renderTemplate(elements.subject.value, recipient);
   }
   if (elements.messageHtmlPreview) {
-    elements.messageHtmlPreview.srcdoc = renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">Noch kein HTML-Design vorhanden.</p>";
+    const messagePreview = elements.messageHtmlPreview;
+    messagePreview.onload = () => {
+      const previewDocument = messagePreview.contentDocument;
+      const contentHeight = Math.max(
+        previewDocument?.documentElement?.scrollHeight || 0,
+        previewDocument?.body?.scrollHeight || 0,
+      );
+      if (contentHeight) messagePreview.style.height = `${contentHeight}px`;
+    };
+    messagePreview.srcdoc = renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">Noch kein HTML-Design vorhanden.</p>";
   }
   elements.previewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "kein Empfänger";
   elements.previewSubject.textContent = renderTemplate(elements.subject.value, recipient);
   if (document.activeElement !== elements.previewBody) {
     elements.previewBody.value = elements.body.value;
   }
-  elements.htmlPreview.srcdoc = renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">Noch kein HTML-Design vorhanden.</p>";
+  elements.htmlPreview.onload = () => {
+    const previewDocument = elements.htmlPreview.contentDocument;
+    const contentHeight = Math.max(
+      previewDocument?.documentElement?.scrollHeight || 0,
+      previewDocument?.body?.scrollHeight || 0,
+      800,
+    );
+    elements.htmlPreview.style.height = `${contentHeight}px`;
+  };
+  elements.htmlPreview.srcdoc = previewHtmlWithBlockedImages(renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">Noch kein HTML-Design vorhanden.</p>");
 
   const canSend = Boolean(
-    elements.accountEmail.value.trim()
+    emailPattern.test(elements.accountEmail.value.trim())
       && elements.appPassword.value.trim()
       && elements.subject.value.trim()
-      && (elements.body.value.trim() || elements.htmlBody.value.trim())
+      && elements.body.value.trim()
+      && elements.htmlBody.value.includes("{{content}}")
       && recipients.length
   );
-  elements.testButton.disabled = !canSend;
-  elements.sendButton.disabled = !canSend;
+  elements.testButton.disabled = sending || !canSend || !emailPattern.test(document.querySelector("#testEmail").value.trim());
+  elements.sendButton.disabled = sending || !canSend;
   if (elements.summaryReady) {
     elements.summaryReady.textContent = canSend ? "Ja" : "Nein";
   }
+  if (studioReady) syncStudio();
 }
 
 async function testAuth() {
@@ -1213,12 +1287,15 @@ function parseCurrentInput() {
 }
 
 async function send(testOnly) {
-  if (!recipients.length) return;
+  if (!recipients.length || sending) return;
+  const testEmail = document.querySelector("#testEmail").value.trim();
+  if (testOnly && !emailPattern.test(testEmail)) { setStatus("Bitte eine gültige Testadresse eintragen.", "error"); return; }
 
   const verb = testOnly ? "Test-Mail" : `${recipients.length} Mails`;
   const confirmed = testOnly || window.confirm(`${verb} über ${elements.accountEmail.value.trim()} senden?`);
   if (!confirmed) return;
 
+  sending = true;
   elements.testButton.disabled = true;
   elements.sendButton.disabled = true;
   setStatus(`${verb} wird gesendet... Browser-Tab bitte offen lassen.`);
@@ -1239,7 +1316,9 @@ async function send(testOnly) {
         recipientColumns,
         recipients,
         delayMs: Number(elements.delayMs.value),
-        testOnly
+        testOnly,
+        testEmail,
+        previewIndex
       })
     });
     const payload = await response.json();
@@ -1260,6 +1339,7 @@ async function send(testOnly) {
   } catch (error) {
     setStatus(error.message, "error");
   } finally {
+    sending = false;
     updatePreview();
   }
 }
@@ -1422,11 +1502,11 @@ elements.previewBody.addEventListener("input", () => {
 });
 
 elements.draftSelect.addEventListener("change", () => {
-  const selectedName = normalizeDraftName(elements.draftSelect.value);
-  if (selectedName) {
-    elements.draftName.value = selectedName;
-    setSelectedDraftName(selectedName);
-  }
+  const targetName = elements.draftSelect.value;
+  clearTimeout(autosaveTimer);
+  saveDraft();
+  elements.draftSelect.value = targetName;
+  loadDraft(true);
 });
 
 elements.tableSelect?.addEventListener("change", () => {
@@ -1464,9 +1544,248 @@ updateDraftSelectOptions(getSelectedDraftName());
 updateTableSelectOptions(getSelectedTableName());
 loadDraft(false);
 updateEditorVariables();
-if (!recipients.length) {
+if (!recipients.length && elements.rawRecipients.value.trim()) {
   parseCurrentInput();
 }
 updateTable();
 updatePreview();
-activatePage("overview");
+initStudio();
+activatePage("message");
+
+function renderSidebarDrafts(collection, activeName) {
+  const list = document.querySelector('#sidebarDrafts');
+  if (!list) return;
+  list.innerHTML = Object.values(collection).sort((a,b) => String(b.savedAt).localeCompare(String(a.savedAt))).map(d => `<button type="button" data-draft="${escapeHtml(d.draftName)}" class="${d.draftName === activeName ? 'active' : ''}" title="${escapeHtml(d.draftName)}">${escapeHtml(d.draftName)}</button>`).join('');
+}
+
+function cleanEditorHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,iframe,object,embed,link,meta,form,input,svg,math').forEach(el => el.remove());
+  doc.body.querySelectorAll('*').forEach(el => {
+    for (const attr of [...el.attributes]) {
+      if (/^on/i.test(attr.name) || ['srcdoc','srcset'].includes(attr.name) || (['href','src'].includes(attr.name) && !/^(https?:|mailto:|\{\{)/i.test(attr.value))) el.removeAttribute(attr.name);
+    }
+  });
+  return doc.body.innerHTML;
+}
+
+function buttonChip(label, target, variant = 'gradient') {
+  const span = document.createElement('span');
+  span.className = 'mail-button';
+  span.contentEditable = 'false';
+  span.dataset.label = label;
+  span.dataset.target = target;
+  span.dataset.variant = variant;
+  span.textContent = label + ' ↗';
+  span.title = target + ' · Klicken zum Bearbeiten';
+  return span.outerHTML;
+}
+
+function visualHtml(source) {
+  return cleanEditorHtml(source
+    .replace(/button\{\{\s*([^,}]+)\s*,\s*([^,}]+?)(?:\s*,\s*([a-z]+))?\s*\}\}/gi, (_, label, target, variant) => buttonChip(label.trim(), target.trim(), variant || 'gradient'))
+    .replace(/\{\{\s*button\s*:\s*([^|}]+)\|\s*([^|}]+?)(?:\|\s*([a-z]+))?\s*\}\}/gi, (_, label, target, variant) => buttonChip(label.trim(), target.trim(), variant || 'gradient')));
+}
+
+function syncVisualEditor() {
+  const editor = document.querySelector('#visualEditor');
+  if (editor.dataset.source !== elements.body.value) {
+    editor.innerHTML = visualHtml(elements.body.value);
+    editor.dataset.source = elements.body.value;
+  }
+}
+
+function commitVisualEditor() {
+  const editor = document.querySelector('#visualEditor');
+  const clone = editor.cloneNode(true);
+  const macros = [];
+  clone.querySelectorAll('.mail-button').forEach(el => { const index = macros.push(`button{{${el.dataset.label},${el.dataset.target},${el.dataset.variant || 'gradient'}}}`) - 1; el.replaceWith(document.createComment(`mail-button-${index}`)); });
+  elements.body.value = clone.innerHTML.replace(/<!--mail-button-(\d+)-->/g, (_,index) => macros[Number(index)]);
+  editor.dataset.source = elements.body.value;
+  updatePreview();
+  queueAutosave();
+}
+
+function rememberEditorSelection() {
+  const selection = window.getSelection();
+  if (selection.rangeCount && document.querySelector('#visualEditor').contains(selection.anchorNode)) savedEditorRange = selection.getRangeAt(0).cloneRange();
+}
+
+function restoreEditorSelection() {
+  const editor = document.querySelector('#visualEditor');
+  editor.focus();
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  if (savedEditorRange && editor.contains(savedEditorRange.commonAncestorContainer)) selection.addRange(savedEditorRange);
+  else { const range = document.createRange(); range.selectNodeContents(editor); range.collapse(false); selection.addRange(range); }
+}
+
+function insertEditorHtml(html) {
+  restoreEditorSelection();
+  document.execCommand('insertHTML', false, html);
+  rememberEditorSelection();
+  commitVisualEditor();
+}
+
+function readDesignSettings() {
+  return {layout:document.querySelector('[name="layout"]:checked').value,accent:document.querySelector('#designAccent').value,background:document.querySelector('#designBackground').value,font:document.querySelector('#designFont').value,padding:Number(document.querySelector('#designPadding').value),width:Number(document.querySelector('#designWidth').value)};
+}
+
+function restoreDesignSettings(settings) {
+  settings ||= {layout:"letter",accent:"#0a2d57",background:"#f5f5f4",font:"Arial,Helvetica,sans-serif",padding:32,width:600};
+  for (const [key,id] of Object.entries({accent:'designAccent',background:'designBackground',font:'designFont',padding:'designPadding',width:'designWidth'})) {
+    if (settings[key] != null) document.getElementById(id).value = settings[key];
+  }
+  const layout = document.querySelector(`[name="layout"][value="${settings.layout === 'card' ? 'card' : 'letter'}"]`);
+  layout.checked = true;
+}
+
+
+function withClubLogo(template) {
+  if (!template) return template;
+  let result = template;
+  if (!result.includes(clubEmailLogoUrl)) {
+    result = result.replace(/(<td\b(?=[^>]*class="[^"]*\blogo-container\b)[^>]*>)[\s\S]*?(<\/td>)/i,
+      `$1<img src="${clubEmailLogoUrl}" width="320" alt="TUM Social AI Club" style="display:block;width:320px;max-width:100%;height:auto;border:0;">$2`);
+  }
+  return result
+    .replace('.logo-container { padding: 12px 20px !important; }', '.logo-container { height:66px !important; padding:0 16px !important; }')
+    .replace('style="padding:0 0 14px;background:#ffffff;"', 'style="padding:0 0 16px;background:#ffffff;"')
+    .replace('style="padding:0;background:#ffffff;"', 'style="padding:0 0 16px;background:#ffffff;"')
+    .replace('style="background:#ffffff;border:1px solid rgba(10,45,87,0.10);border-radius:24px;box-shadow:0 12px 28px rgba(10,45,87,0.16);"', 'style="height:66px;background:#ffffff;border:1px solid rgba(10,45,87,0.10);border-radius:24px;border-collapse:separate;overflow:hidden;box-shadow:0 4px 12px rgba(10,45,87,0.06);"')
+    .replace('style="padding:24px 20px;vertical-align:middle;background:#ffffff;border-radius:24px;"', 'height="66" style="height:66px;padding:0 16px;vertical-align:middle;background:#ffffff;border-radius:24px;"')
+    .replace('border-radius:26px;overflow:hidden;box-shadow:0 18px 48px rgba(10,45,87,0.10);', 'border-radius:24px;overflow:hidden;box-shadow:0 8px 20px rgba(10,45,87,0.06);');
+}
+
+function buildDesignTemplate() {
+  const d = readDesignSettings();
+  const card = d.layout === 'card';
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><style>body{margin:0}p{line-height:1.7;margin:0 0 20px}h2{font-size:24px;line-height:1.3;margin:0 0 22px}a{color:${d.accent}}@media(max-width:480px){.mail-content{padding:24px 20px!important}.mail-outer{padding:12px 0!important}}</style></head><body data-mail-accent="${d.accent}" data-mail-font="${d.font.includes('Georgia')?'serif':'sans'}" style="margin:0;background:${card?d.background:'#ffffff'};font-family:${d.font};color:#303830"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td class="mail-outer" style="padding:${card?'32px 12px':'16px 0'}"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:${d.width}px;margin:auto;background:white;${card?'border-radius:12px;':''}"><tr><td height="66" style="height:66px;padding:0 16px;vertical-align:middle;background:#fff;border:1px solid rgba(10,45,87,0.10);border-radius:24px;border-collapse:separate;overflow:hidden;box-shadow:0 4px 12px rgba(10,45,87,0.06)"><img src="${clubEmailLogoUrl}" width="320" alt="TUM Social AI Club" style="display:block;width:320px;max-width:100%;height:auto;border:0"></td></tr><tr><td height="16" style="height:16px;line-height:16px;font-size:0">&nbsp;</td></tr><tr><td class="mail-content" style="padding:${d.padding}px;font-size:15px;border:1px solid rgba(10,45,87,0.08);border-radius:24px;box-shadow:0 8px 20px rgba(10,45,87,0.06)">{{content}}</td></tr></table></td></tr></table></body></html>`;
+}
+
+function updateDesignPreview() {
+  document.querySelector('#paddingValue').textContent = document.querySelector('#designPadding').value + ' px';
+  document.querySelector('#designPreview').srcdoc = renderHtmlMessage(buildDesignTemplate(), elements.body.value, recipients[previewIndex] || {name:"Alex Example",email:"alex@example.com"});
+}
+
+function syncStudio() {
+  syncVisualEditor();
+  const select = document.querySelector('#previewSelect');
+  const options = recipients.map((r,i) => `<option value="${i}">${escapeHtml(r.name || r.email)}</option>`).join('') || '<option value="0">Beispiel ohne Empfänger</option>';
+  if (select.innerHTML !== options) select.innerHTML = options;
+  select.value = String(previewIndex);
+  const checks = [
+    [emailPattern.test(elements.accountEmail.value.trim()) && !!elements.appPassword.value.trim(),'Absender und Zugangsdaten eingetragen','Absenderkonto einrichten'],
+    [recipients.length > 0,`${recipients.length} Empfänger in der Liste`,'Empfänger hinzufügen'],
+    [!!elements.subject.value.trim(),'Betreff vorhanden','Betreff ergänzen'],
+    [!!elements.body.value.trim(),'Nachricht vorhanden','Nachricht schreiben'],
+    [elements.htmlBody.value.includes('{{content}}'),'Mail-Layout vorhanden','Layout mit {{content}} ergänzen']
+  ];
+  document.querySelector('#sendChecklist').innerHTML = checks.map(([ok,yes,no])=>`<div class="${ok?'done':''}">${ok?'✓':'○'} &nbsp; ${escapeHtml(ok?yes:no)}</div>`).join('');
+}
+
+function initStudio() {
+  studioReady = true;
+  const editor = document.querySelector('#visualEditor');
+  document.addEventListener('selectionchange', rememberEditorSelection);
+  editor.addEventListener('input',commitVisualEditor);
+  editor.addEventListener('paste',event=>{
+    event.preventDefault();
+    const text = event.clipboardData.getData('text/plain');
+    insertEditorHtml(escapeHtml(text).replace(/\n/g,'<br>'));
+  });
+  document.querySelector('#visualMode').addEventListener('click',()=>setEditorMode('visual'));
+  document.querySelector('#sourceMode').addEventListener('click',()=>setEditorMode('source'));
+  document.querySelector('#formatToolbar').addEventListener('mousedown',event=>event.preventDefault());
+  document.querySelector('#insertDivider').addEventListener('click',()=>insertEditorHtml('<hr style="border:0;border-top:1px solid #dbe3ec;margin:24px 0;">'));
+  document.querySelectorAll('[data-format]').forEach(button=>button.addEventListener('click',()=>{
+    restoreEditorSelection(); document.execCommand(button.dataset.format,false,button.dataset.value || null); commitVisualEditor();
+  }));
+  document.querySelector('#insertButton').addEventListener('click',()=>openLinkDialog('button'));
+  document.querySelector('#insertLink').addEventListener('click',()=>openLinkDialog('link'));
+  editor.addEventListener('click',event=>{
+    const button=event.target.closest('.mail-button');
+    if(button) openLinkDialog('button',button);
+  });
+  document.querySelector('#linkForm').addEventListener('submit',event=>{
+    if (event.submitter?.value !== 'save') return;
+    event.preventDefault();
+    const label=document.querySelector('#linkLabel').value.trim();
+    const target=document.querySelector('#linkTarget').value.trim();
+    const variant=document.querySelector('#buttonVariant').value;
+    const validUrl=/^(https?:\/\/|mailto:)[^\s<>"']+$/i.test(target);
+    const validVariable=recipientColumns.some(c=>c.key===target||c.label===target);
+    if (!label || /[{},|]/.test(label) || /[{}]/.test(target) || !(validUrl || (linkKind==='button' && validVariable))) {
+      document.querySelector('#linkError').textContent='Bitte einen gültigen Link oder eine vorhandene Spaltenvariable verwenden. Die Beschriftung darf keine geschweiften Klammern, Kommas oder | enthalten.'; return;
+    }
+    const html=linkKind==='button'?buttonChip(label,target,variant):`<a href="${escapeHtml(target)}">${escapeHtml(label)}</a>`;
+    document.querySelector('#linkDialog').close();
+    if(editingButton) { editingButton.outerHTML=html; commitVisualEditor(); }
+    else insertEditorHtml(html);
+  });
+  document.querySelector('#deleteLink').addEventListener('click',()=>{if(editingButton)editingButton.remove();commitVisualEditor();document.querySelector('#linkDialog').close();});
+  document.querySelectorAll('.design-controls input,.design-controls select').forEach(el=>el.addEventListener('input',()=>{
+    updateDesignPreview();document.querySelector('#designState').textContent='Auswahl · noch nicht angewendet';
+  }));
+  document.querySelector('#applyDesign').addEventListener('click',()=>{
+    elements.htmlBody.value=buildDesignTemplate();updatePreview();queueAutosave();document.querySelector('#designState').textContent='Auf Entwurf angewendet';setStatus('Gestaltung auf diesen Entwurf angewendet.','ok');
+  });
+  document.querySelector('#previewSelect').addEventListener('change',event=>{previewIndex=Number(event.target.value);updatePreview();});
+  document.querySelector('#loadedContentPreview').addEventListener('click',()=>setPreviewImagesBlocked(false));
+  document.querySelector('#blockedContentPreview').addEventListener('click',()=>setPreviewImagesBlocked(true));
+  document.querySelector('#showPreviewImages').addEventListener('click',()=>setPreviewImagesBlocked(false));
+  for(const mode of ['desktop','mobile']) document.querySelector(`#${mode}Preview`).addEventListener('click',()=>{
+    document.querySelector('.full-preview').classList.toggle('mobile',mode==='mobile');
+    document.querySelector('#desktopPreview').classList.toggle('selected',mode==='desktop');
+    document.querySelector('#mobilePreview').classList.toggle('selected',mode==='mobile');
+  });
+  document.querySelector('#testEmail').addEventListener('input',updatePreview);
+  document.querySelector('#sidebarDrafts').addEventListener('click',event=>{
+    const button=event.target.closest('[data-draft]');if(!button)return;
+    clearTimeout(autosaveTimer);saveDraft();
+    elements.draftSelect.value=button.dataset.draft;loadDraft(true);activatePage('message');
+  });
+  document.querySelector('#newDraft').addEventListener('click',()=>{
+    clearTimeout(autosaveTimer);saveDraft();
+    const collection=readDraftCollection();let name='Neuer Entwurf';let i=2;while(collection[name])name=`Neuer Entwurf ${i++}`;
+    setSelectedDraftName(name);elements.draftName.value=name;elements.subject.value='';elements.body.value='<p>Hi {{firstName}},</p><p><br></p><p>Best,<br>The Social AI Club Team</p>';
+    recipients=[];syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('message');elements.subject.focus();
+  });
+  document.querySelector('#deleteDraftButton').addEventListener('click',()=>{
+    clearTimeout(autosaveTimer);
+    if(!loadDraft(false)){elements.subject.value='';elements.body.value='';recipients=[];syncRawRecipientsFromTable();updateTable();updatePreview();}
+  });
+  document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key==='s'){event.preventDefault();saveDraft();setStatus('Entwurf gespeichert.','ok');}});
+  syncStudio();updateDesignPreview();
+}
+
+function setEditorMode(mode) {
+  editorMode=mode;
+  document.querySelector('#visualEditor').hidden=mode!=='visual';
+  document.querySelector('#formatToolbar').hidden=mode!=='visual';
+  elements.body.hidden=mode==='visual';
+  document.querySelector('#visualMode').classList.toggle('selected',mode==='visual');
+  document.querySelector('#sourceMode').classList.toggle('selected',mode==='source');
+  if(mode==='visual')syncVisualEditor();
+}
+
+function setPreviewImagesBlocked(blocked) {
+  previewImagesBlocked = blocked;
+  document.querySelector('#loadedContentPreview').classList.toggle('selected', !blocked);
+  document.querySelector('#blockedContentPreview').classList.toggle('selected', blocked);
+  document.querySelector('#blockedPreviewNotice').hidden = !blocked;
+  updatePreview();
+}
+
+function openLinkDialog(kind,button=null) {
+  rememberEditorSelection();linkKind=kind;editingButton=button;
+  document.querySelector('#linkDialogTitle').textContent=kind==='button'?(button?'Button bearbeiten':'Button einfügen'):'Link einfügen';
+  document.querySelector('#linkLabel').value=button?.dataset.label||'';
+  document.querySelector('#linkTarget').value=button?.dataset.target||'';
+  document.querySelector('#buttonVariant').value=button?.dataset.variant||'gradient';
+  document.querySelector('#buttonVariantField').hidden=kind!=='button';
+  document.querySelector('#linkError').textContent='';
+  document.querySelector('#saveLink').textContent=button?'Übernehmen':'Einfügen';
+  document.querySelector('#deleteLink').hidden=!button;
+  document.querySelector('#linkDialog').showModal();
+}
