@@ -3,3 +3,15 @@ node_modules
 .env
 campaigns/
 drafts/
+data/
+
+/public/send-progress.json
+/public/send-progress.json.tmp
+
+# Local environment variants and private exports
+.env.*
+!.env.example
+*.log
+# Historical local screenshots: real contact data / obsolete view, never publish
+/docs/screenshots/05-notion-audiences.jpg
+/docs/screenshots/06-simplified-workflow.jpg

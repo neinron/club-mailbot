@@ -3,12 +3,18 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sendViaGmailSmtp, testGmailSmtpAuth } from "./smtp.js";
+import { loadLocalEnv } from "./env.js";
+import { createUnsubscribeToken } from "./unsubscribe.js";
+import { notionConfig, loadNotionAudience, validateNotionRecipients } from './notion-audience.js';
+import { workspaceStore } from './workspace-store.js';
+import { deliveryRecorder } from './delivery-audit.js';
+import { notionRequest, queryNotionSource } from './notion-cli.js';
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const root = normalize(join(__dirname, "..", "public"));
 const port = Number(process.env.PORT || 5177);
 const host = process.env.HOST || "127.0.0.1";
-const maxRecipients = 250;
+const workspace = workspaceStore(join(__dirname, '..', 'data'));
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -38,16 +44,16 @@ function serializeError(error) {
 }
 
 function sendJson(res, status, payload) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
   res.end(JSON.stringify(payload));
 }
 
-function readJson(req) {
+function readJson(req, limit = 1_000_000) {
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1_000_000) {
+      if (body.length > limit) {
         reject(new Error("Request body is too large."));
         req.destroy();
       }
@@ -89,7 +95,7 @@ function renderTemplate(template, recipient, columns = []) {
     ...safeRecipient,
     name,
     email: safeRecipient.email,
-    firstName: safeRecipient.firstName || name.split(/\s+/)[0] || name,
+    firstName: safeRecipient.firstName || (safeRecipient.notionPageId ? "there" : name.split(/\s+/)[0]) || name,
     lastName: safeRecipient.lastName || name.split(/\s+/).slice(1).join(" ")
   };
 
@@ -165,23 +171,104 @@ function enforceAnchorStyles(html) {
 }
 
 function enforceTypography(html) {
-  return String(html || "")
-    .replace(/<(p|div|li|span|td|ul|ol)\b([^>]*?)>/gi, (match, tag, attrs) => {
-      if (/style\s*=/i.test(attrs)) {
-        return `<${tag}${attrs.replace(/style=(["'])(.*?)\1/i, (_styleMatch, quote, styleValue) => (
-          ` style=${quote}${styleValue};font-family:'Albert Sans',Arial,Helvetica,sans-serif;${quote}`
-        ))}>`;
-      }
-      return `<${tag}${attrs} style="font-family:'Albert Sans',Arial,Helvetica,sans-serif;">`;
-    })
-    .replace(/<(h1|h2|h3)\b([^>]*?)>/gi, (match, tag, attrs) => {
-      if (/style\s*=/i.test(attrs)) {
-        return `<${tag}${attrs.replace(/style=(["'])(.*?)\1/i, (_styleMatch, quote, styleValue) => (
-          ` style=${quote}${styleValue};font-family:'League Spartan',Arial,Helvetica,sans-serif;${quote}`
-        ))}>`;
-      }
-      return `<${tag}${attrs} style="font-family:'League Spartan',Arial,Helvetica,sans-serif;">`;
-    });
+  const setFont = (markup, tags, family) => markup.replace(new RegExp(`<(${tags})\\b([^>]*?)>`, 'gi'), (_match, tag, attrs) => {
+    if (/data-mail-typography=["']true["']/i.test(attrs)) return `<${tag}${attrs}>`;
+    if (/data-mail-font-choice=["'](?:Albert Sans|League Spartan)["']/i.test(attrs)) return `<${tag}${attrs}>`;
+    const font = `font-family:'${family}',Arial,Helvetica,sans-serif;`;
+    if (/style\s*=/i.test(attrs)) {
+      return `<${tag}${attrs.replace(/style=(["'])(.*?)\1/i, (_style, quote, value) => `style=${quote}${value.replace(/font-family\s*:[^;]*(;|$)/gi, '')};${font}${quote}`)}>`;
+    }
+    return `<${tag}${attrs} style="${font}">`;
+  });
+  const body = setFont(String(html || ''), 'body|table|p|div|li|span|td|ul|ol|a', 'Albert Sans');
+  // Inline descendants must not override the heading font through inheritance.
+  return body.replace(/<(h[1-6])\b([^>]*)>([\s\S]*?)<\/\1>/gi, (_match, tag, attrs, content) =>
+    setFont(`<${tag}${attrs}>${setFont(content, 'span|a|strong|b|em|i', 'League Spartan')}</${tag}>`, 'h[1-6]', 'League Spartan'));
+}
+
+function includeEmailFonts(html) {
+  // Direct Google font URLs work without an external stylesheet import.
+  // No font files are attached or embedded in the message.
+  const fonts = `<style data-mailbot-fonts="true">@font-face{font-family:'Albert Sans';font-style:normal;font-weight:400;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHq5P_rA.ttf) format('truetype');}
+@font-face{font-family:'Albert Sans';font-style:normal;font-weight:600;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHdZT_rA.ttf) format('truetype');}
+@font-face{font-family:'Albert Sans';font-style:normal;font-weight:700;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHTJT_rA.ttf) format('truetype');}
+@font-face{font-family:'Albert Sans';font-style:normal;font-weight:800;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHK5T_rA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:400;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvM_oTpBA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:600;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMIIPpBA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:700;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMGYPpBA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:800;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMfoPpBA.ttf) format('truetype');}@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHq5L_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHK5P_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSH9ZP_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHmZP_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHApT_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvM_oXpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMfoTpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMoITpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMzITpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMV4PpBA.ttf) format('truetype');
+}
+</style>`;
+  const clean = String(html).replace(/<style\b[^>]*data-mailbot-fonts=["']true["'][^>]*>[\s\S]*?<\/style>/gi, '');
+  return /<\/head>/i.test(clean) ? clean.replace(/<\/head>/i, `${fonts}</head>`) : fonts + clean;
 }
 
 function tokenPlaceholder(index) {
@@ -218,8 +305,22 @@ function renderHtmlContent(template, recipient, columns = []) {
   working = working.replace(/button\{\{\s*([^,}]+)\s*,\s*([^,}]+?)(?:\s*,\s*([a-z]+))?\s*\}\}/gi, (_, rawLabel, rawTarget, variant) => (
     pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, columns, "html", variant || "gradient"))
   ));
+  working = working.replace(/href=(["'])\{\{\s*([^}]+)\s*\}\}\1/gi, (_match, quote, rawTarget) => {
+    const href = normalizeLinkTarget(rawTarget, recipient, columns).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    return `href=${quote}${href}${quote}`;
+  });
   working = working.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, rawKey) => pushToken(renderVariableValue(rawKey, recipient, columns)));
   return working.replace(/%%MAILBOTE_TOKEN_(\d+)%%/g, (_, rawIndex) => tokens[Number(rawIndex)] || "");
+}
+
+function constrainLogoDimensions(html) {
+  return String(html || "").replace(/<img\b[^>]*>/gi, tag => {
+    if (!/LOGO_V6-ICON(?:%2B|\+)TUM_SOCIAL_CLUB-single_line-dark_text\.svg/i.test(tag)) return tag;
+    let fixed = tag.replace(/\sheight=["'][^"']*["']/i, '').replace(/<img\b/i, '<img height="26"');
+    if (/style=["']/i.test(fixed)) fixed = fixed.replace(/style=(["'])(.*?)\1/i, (_all, quote, css) => `style=${quote}${css.replace(/(?:^|;)\s*(?:max-)?height\s*:[^;]*/gi, '')};height:26px;max-height:26px;${quote}`);
+    else fixed = fixed.replace(/<img\b/i, '<img style="height:26px;max-height:26px;"');
+    return fixed;
+  });
 }
 
 function renderHtmlMessage(designTemplate, contentTemplate, recipient, columns = []) {
@@ -237,7 +338,7 @@ function renderHtmlMessage(designTemplate, contentTemplate, recipient, columns =
   const font = String(designTemplate).match(/data-mail-font="(serif|sans)"/)?.[1];
   if (accent) result = result.replaceAll("#0a2d57", accent);
   if (font === "serif") result = result.replaceAll("'Albert Sans',Arial,Helvetica,sans-serif", "Georgia,serif").replaceAll("'League Spartan',Arial,Helvetica,sans-serif", "Georgia,serif");
-  return result;
+  return includeEmailFonts(constrainLogoDimensions(result));
 }
 
 function normalizeHtmlBody(value) {
@@ -315,11 +416,12 @@ function delay(ms) {
 }
 
 async function handleSend(req, res) {
+  let ownsSendLock = false;
   try {
     const payload = await readJson(req);
     const recipients = sanitizeRecipients(payload.recipients);
     const recipientColumns = sanitizeRecipientColumns(payload.recipientColumns);
-    const delayMs = Math.min(Math.max(Number(payload.delayMs || 1200), 0), 10000);
+    const delayMs = Math.min(Math.max(Number(payload.delayMs) || 1200, 1200), 10000);
     const authSecret = String(payload.authSecret || payload.appPassword || "");
     const authMode = payload.authMode === "xoauth2" ? "xoauth2" : "appPassword";
     const smtpSecurity = payload.smtpSecurity === "starttls587" ? "starttls587" : "ssl465";
@@ -336,9 +438,6 @@ async function handleSend(req, res) {
     if (!recipients.length) {
       return sendJson(res, 400, { error: "No valid recipients found." });
     }
-    if (recipients.length > maxRecipients) {
-      return sendJson(res, 400, { error: `Maximum ${maxRecipients} recipients per run.` });
-    }
 
     const testEmail = String(payload.testEmail || "").trim();
     if (payload.testOnly && !emailPattern.test(testEmail)) {
@@ -349,24 +448,90 @@ async function handleSend(req, res) {
     }
     const previewIndex = Math.max(0, Math.min(recipients.length - 1, Number(payload.previewIndex) || 0));
     const selectedRecipients = payload.testOnly ? [recipients[Math.floor(previewIndex)]] : recipients;
+    if (!payload.testOnly && (payload.audienceSource || recipients.some(recipient => recipient.notionPageId))) {
+      await validateNotionRecipients(recipients, payload.audienceSource);
+    }
+    const usesUnsubscribeLink = /\{\{\s*unsubscribeUrl\s*\}\}/i.test(`${payload.subject || ""}\n${payload.body || ""}\n${payload.htmlBody || ""}`);
+    const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+    const unsubscribeDataSource = process.env.NOTION_DATA_SOURCE_ID || process.env.NEWSLETTER_NOTION_DATA_SOURCE_ID;
+    const unsubscribeEmailProperty = process.env.NOTION_EMAIL_PROPERTY || process.env.NEWSLETTER_NOTION_EMAIL_PROPERTY || "Email";
+    const unsubscribeOptInProperty = process.env.NOTION_OPT_IN_PROPERTY || process.env.NEWSLETTER_NOTION_SUBSCRIBED_PROPERTY || "Subscribed";
+    if (usesUnsubscribeLink) {
+      if (!publicBaseUrl || !(process.env.NEWSLETTER_TOKEN_SECRET || process.env.MAILBOT_UNSUBSCRIBE_SECRET) || !unsubscribeDataSource) {
+        return sendJson(res, 400, { error: "Personalized unsubscribe links need PUBLIC_BASE_URL and the Notion unsubscribe settings in .env." });
+      }
+      if (new URL(publicBaseUrl).protocol !== "https:") {
+        return sendJson(res, 400, { error: "PUBLIC_BASE_URL must use HTTPS for unsubscribe links." });
+      }
+      const pageIdKey = recipientColumns.find((column) => /notion page id/i.test(String(column.label || "")))?.key || "notionPageId";
+      if (recipients.some((recipient) => !recipient[pageIdKey])) {
+        return sendJson(res, 400, { error: "Every recipient needs a Notion Page ID to create an unsubscribe link." });
+      }
+    }
+    if (!payload.testOnly) {
+      if (handleSend.active) return sendJson(res, 409, {error:'A campaign is already running. Wait for it to finish before starting another.'});
+      handleSend.active = true; ownsSendLock = true;
+    }
     const results = [];
+    if (!payload.testOnly) handleSend.progress = {state:'running',phase:'Preparing contacts',total:selectedRecipients.length,processed:0,sent:0,failed:0,skipped:0,updatedAt:new Date().toISOString()};
+    const recordResult = result => {
+      results.push(result);
+      if (!payload.testOnly) Object.assign(handleSend.progress, {
+        processed:results.length,sent:results.filter(r=>r.ok&&!r.skipped).length,
+        failed:results.filter(r=>!r.ok).length,skipped:results.filter(r=>r.skipped).length,
+        phase:'Preparing next email',updatedAt:new Date().toISOString()
+      });
+    };
+    const auditContacts = payload.testOnly ? null : await deliveryAudit.prepare(
+      selectedRecipients.flatMap(recipient => {
+        const addresses = collectMessageAddresses(recipient, recipientColumns);
+        return [...new Set([...addresses.to, ...addresses.cc, ...addresses.bcc])].map(email => ({
+          email, name: email.toLowerCase() === recipient.email.toLowerCase() ? recipient.name : email,
+          ...(email.toLowerCase() === recipient.email.toLowerCase() && recipient.notionPageId ? { notionPageId: recipient.notionPageId } : {})
+        }));
+      })
+    );
 
     for (const [index, recipient] of selectedRecipients.entries()) {
+      let auditEvent;
       try {
+        let mailRecipient = recipient;
+        if (usesUnsubscribeLink) {
+          const pageIdKey = recipientColumns.find((column) => /notion page id/i.test(String(column.label || "")))?.key || "notionPageId";
+          const unsubscribeUrl = payload.testOnly
+            ? `${publicBaseUrl}/unsubscribe/test-preview`
+            : new URL(`${publicBaseUrl}/unsubscribe/${createUnsubscribeToken({ pageId: recipient[pageIdKey], email: recipient.email, dataSourceId: unsubscribeDataSource, emailProperty: unsubscribeEmailProperty, optInProperty: unsubscribeOptInProperty })}`).toString();
+          mailRecipient = { ...recipient, unsubscribeUrl };
+        }
         const addresses = payload.testOnly
           ? { to: [testEmail], cc: [], bcc: [], replyTo: [] }
-          : collectMessageAddresses(recipient, recipientColumns);
+          : collectMessageAddresses(mailRecipient, recipientColumns);
         if (!addresses.to.length) {
           throw new Error("No recipient address with the “To” role was found.");
         }
         const htmlBody = renderHtmlMessage(
           normalizeHtmlBody(payload.htmlBody),
           String(payload.body || "").trim(),
-          recipient,
+          mailRecipient,
           recipientColumns
         );
         const plainBody = plainTextFromHtml(htmlBody);
+        const subject = renderTemplate(payload.subject, mailRecipient, recipientColumns);
+        if (!payload.testOnly) {
+          const metadata = {
+          contacts: [...new Set([...addresses.to, ...addresses.cc, ...addresses.bcc])].map(email => auditContacts.get(email.toLowerCase())),
+          campaign: String(payload.draftName || payload.subject).slice(0, 500), subject,
+          purpose: payload.audienceSource?.purpose || 'Manual list', sender: String(payload.accountEmail)
+          };
+          const previous = await deliveryAudit.previousAttempt(metadata);
+          if (previous) {
+            recordResult({email:recipient.email,name:recipient.name,ok:previous === 'Sent',skipped:true,...(previous === 'Unknown' ? {error:'Previous attempt has an unknown result. Check delivery before retrying.'} : {})});
+            continue;
+          }
+          auditEvent = await deliveryAudit.begin(metadata);
+        }
 
+        if (!payload.testOnly) handleSend.progress.phase = 'Sending email';
         const sendResult = await sendViaGmailSmtp({
           accountEmail: payload.accountEmail,
           authSecret,
@@ -377,14 +542,24 @@ async function handleSend(req, res) {
           cc: addresses.cc,
           bcc: addresses.bcc,
           replyTo: addresses.replyTo,
-          subject: renderTemplate(payload.subject, recipient, recipientColumns),
+          subject,
           body: plainBody,
           htmlBody
         });
-        results.push({ email: payload.testOnly ? testEmail : recipient.email, name: recipient.name, ok: true, trace: sendResult.trace });
+        let auditWarning;
+        if (auditEvent) {
+          try { handleSend.progress.phase = 'Saving to Notion'; auditWarning = await deliveryAudit.finish(auditEvent, 'Sent'); }
+          catch { auditWarning = 'SMTP accepted the email, but saving its audit result failed. Do not resend; check the local delivery journal.'; }
+        }
+        recordResult({ email: payload.testOnly ? testEmail : recipient.email, name: recipient.name, ok: true, trace: sendResult.trace, ...(auditWarning ? { auditWarning } : {}) });
       } catch (error) {
         const serialized = serializeError(error);
-        results.push({ email: recipient.email, name: recipient.name, ok: false, error: serialized.message, trace: serialized.trace });
+        let auditWarning;
+        if (auditEvent) {
+          try { auditWarning = await deliveryAudit.finish(auditEvent, 'Failed'); }
+          catch { auditWarning = 'The failed attempt could not be synchronized. Check the local delivery journal.'; }
+        }
+        recordResult({ email: recipient.email, name: recipient.name, ok: false, error: serialized.message, trace: serialized.trace, ...(auditWarning ? { auditWarning } : {}) });
       }
 
       if (index < selectedRecipients.length - 1 && delayMs > 0) {
@@ -392,10 +567,15 @@ async function handleSend(req, res) {
       }
     }
 
-    sendJson(res, 200, { sent: results.filter((result) => result.ok).length, total: results.length, results });
+    sendJson(res, 200, { sent: results.filter((result) => result.ok && !result.skipped).length, skipped: results.filter(result=>result.skipped).length, total: results.length, results });
   } catch (error) {
     const serialized = serializeError(error);
     sendJson(res, 500, { error: serialized.message, trace: serialized.trace });
+  } finally {
+    if (ownsSendLock) {
+      handleSend.active = false;
+      if (handleSend.progress) { handleSend.progress.state = handleSend.progress.processed === handleSend.progress.total ? 'finished' : 'interrupted'; handleSend.progress.updatedAt = new Date().toISOString(); }
+    }
   }
 }
 
@@ -437,7 +617,7 @@ async function serveStatic(req, res) {
 
   try {
     const file = await readFile(safePath);
-    res.writeHead(200, { "content-type": mimeTypes[extname(safePath)] || "application/octet-stream" });
+    res.writeHead(200, { "content-type": mimeTypes[extname(safePath)] || "application/octet-stream", "cache-control": "no-store" });
     res.end(file);
   } catch {
     res.writeHead(404);
@@ -445,7 +625,35 @@ async function serveStatic(req, res) {
   }
 }
 
+await loadLocalEnv();
+const deliveryAudit = deliveryRecorder({ directory: join(__dirname, '..', 'data', 'deliveries'), sourceId: notionConfig().sourceId, request: notionRequest, query: queryNotionSource });
+// Recovery only synchronizes audit metadata; it never sends or retries email.
+deliveryAudit.retry().catch(() => console.error('Delivery history recovery failed. Local records are retained.'));
+const auditRetryTimer = setInterval(() => deliveryAudit.retry().catch(() => {}), 60_000);
+auditRetryTimer.unref();
+
 createServer((req, res) => {
+  if (req.url?.startsWith('/api/')) {
+    const localHost = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(req.headers.host || '');
+    const origin = req.headers.origin;
+    if (!localHost || (origin && origin !== `http://${req.headers.host}`) || req.headers['sec-fetch-site'] === 'cross-site') {
+      return sendJson(res, 403, { error: 'Use Mailbot from its local browser tab.' });
+    }
+  }
+  if (req.method === 'GET' && req.url === '/api/send/status') return sendJson(res, 200, handleSend.progress || {state:'idle'});
+  if (req.method === 'GET' && req.url === '/api/notion/status') return sendJson(res, 200, notionConfig());
+  if (req.method === 'GET' && req.url === '/api/workspace') {
+    workspace.read().then(data => sendJson(res, 200, data)).catch(() => sendJson(res, 500, { error: 'Could not read saved workspace.' }));
+    return;
+  }
+  if (req.method === 'PUT' && /^\/api\/workspace\/(drafts|lists)$/.test(req.url || '')) {
+    readJson(req, 10_000_000).then(data => workspace.save(req.url.split('/').at(-1), data)).then(() => sendJson(res, 200, { saved: true })).catch(() => sendJson(res, 500, { error: 'Could not save workspace to disk.' }));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/api/notion/load') {
+    loadNotionAudience().then(data => sendJson(res, 200, data)).catch(() => sendJson(res, 503, { error: 'Could not load the configured Notion database. Check the local API key, database access, and your connection, then retry.' }));
+    return;
+  }
   if (req.method === "POST" && req.url === "/api/send") {
     handleSend(req, res);
     return;

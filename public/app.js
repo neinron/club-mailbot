@@ -1,3 +1,8 @@
+let serverSendActive = false;
+const editorUndo = [];
+const editorRedo = [];
+let restoringEditorHistory = false;
+let persistCollection = () => Promise.reject(new Error("Storage is not ready."));
 let studioReady = false;
 let editorMode = "visual";
 let previewIndex = 0;
@@ -66,6 +71,9 @@ const elements = {
   smtpLogs: document.querySelector("#smtpLogs"),
   saveDraftButton: document.querySelector("#saveDraftButton"),
   loadDraftButton: document.querySelector("#loadDraftButton"),
+  importDraftButton: document.querySelector("#importDraftButton"),
+  exportDraftButton: document.querySelector("#exportDraftButton"),
+  draftJsonFile: document.querySelector("#draftJsonFile"),
   deleteDraftButton: document.querySelector("#deleteDraftButton"),
   pageLinks: Array.from(document.querySelectorAll("[data-page-target]")),
   pages: Array.from(document.querySelectorAll("[data-page]")),
@@ -77,13 +85,23 @@ const elements = {
 };
 
 let recipients = [];
+let recipientEditing = false;
+let uiInitialized = false;
+let pendingReusableList = null;
+let pendingListIsCurrent = false;
+let audienceSource = null;
 let recipientColumns = [...defaultRecipientColumns];
 let parseStats = { invalid: 0, duplicates: 0 };
 let autosaveTimer = null;
 let isHydratingDraft = false;
 
 function activatePage(pageName) {
-  if (pageName === "design" && studioReady) updateDesignPreview();
+  if (pageName === 'design') {
+    pageName = 'message';
+    document.querySelector('#designDetails').open = true;
+    if (studioReady) updateDesignPreview();
+  }
+  if (pageName === 'send' || pageName === 'preview') pageName = 'review';
   document.querySelectorAll(".page-nav .page-link").forEach(link => link.setAttribute("aria-current", link.dataset.pageTarget === pageName ? "page" : "false"));
   elements.pages.forEach((page) => {
     page.classList.toggle("active", page.dataset.page === pageName);
@@ -93,10 +111,13 @@ function activatePage(pageName) {
     link.classList.toggle("active", link.dataset.pageTarget === pageName);
   });
 
+  const titles = {recipients:'Recipients', message:'Message', review:'Review & send', contacts:'Contacts & lists', account:'Settings'};
   const activeLink = elements.pageLinks.find((link) => link.dataset.pageTarget === pageName);
   if (elements.workspaceTitle && activeLink) {
-    elements.workspaceTitle.textContent = activeLink.querySelector("span")?.textContent || "Mailbot";
+    elements.workspaceTitle.textContent = titles[pageName] || activeLink.querySelector("span")?.textContent || "Mailbot";
   }
+  if (uiInitialized) { history.replaceState(null, '', '#'+pageName); window.scrollTo(0,0); }
+  document.dispatchEvent(new CustomEvent('mailbot:page-changed', {detail:{page:pageName}}));
 }
 
 function parseDelimited(text) {
@@ -227,11 +248,13 @@ function looksLikeHeader(row) {
 function buildColumnsFromHeaders(headers) {
   const seen = new Set();
   const columns = headers
-    .map(canonicalColumnFromHeader)
-    .filter((column) => {
-      if (!column.key || seen.has(column.key)) return false;
+    .map((header) => {
+      const column = canonicalColumnFromHeader(header);
+      const baseKey = column.key || "property";
+      let suffix = 2;
+      while (seen.has(column.key)) column.key = `${baseKey}${suffix++}`;
       seen.add(column.key);
-      return true;
+      return column;
     });
 
   for (const baseColumn of defaultRecipientColumns) {
@@ -309,8 +332,9 @@ function buildColumnsForDataRows(rows) {
 
 function parseRecipients(text) {
   const rows = parseDelimited(text);
-  const dataRows = rows;
-  const columns = buildColumnsForDataRows(dataRows);
+  const hasHeader = rows.length > 0 && looksLikeHeader(rows[0]);
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const columns = hasHeader ? buildColumnsFromHeaders(rows[0]) : buildColumnsForDataRows(dataRows);
   const parsed = [];
   let invalid = 0;
   let duplicates = 0;
@@ -339,7 +363,7 @@ function renderTemplate(template, recipient, columns = recipientColumns) {
   const record = ensureRequiredRecipientFields(recipient || {});
   const variables = {
     ...record,
-    firstName: String(record.firstName || record.name.split(/\s+/)[0] || ""),
+    firstName: String(record.firstName || (record.notionPageId ? "there" : record.name.split(/\s+/)[0]) || ""),
     lastName: String(record.lastName || record.name.split(/\s+/).slice(1).join(" ") || "")
   };
 
@@ -402,6 +426,11 @@ function normalizeAnchorTargets(html, recipient) {
   });
 }
 
+function previewHtmlWithLocalSocialIcons(html) {
+  const icons = { "LinkedIn-app-icon.png": "linkedin.png", "instagram-app-icon.png": "instagram.png", "luma-app-icon.png": "luma.png" };
+  return String(html || "").replace(/https:\/\/tum-socialaiclub\.de\/assets\/socials-logos\/(LinkedIn-app-icon\.png|instagram-app-icon\.png|luma-app-icon\.png)/g, (_url, name) => `/social-icons/${icons[name]}`);
+}
+
 function previewHtmlWithBlockedImages(html) {
   if (!previewImagesBlocked) return html;
   return String(html || "").replace(/<img\b([^>]*?)\/?\s*>/gi, (_match, attrs) => {
@@ -427,23 +456,104 @@ function enforceAnchorStyles(html) {
 }
 
 function enforceTypography(html) {
-  return String(html || "")
-    .replace(/<(p|div|li|span|td|ul|ol)\b([^>]*?)>/gi, (match, tag, attrs) => {
-      if (/style\s*=/i.test(attrs)) {
-        return `<${tag}${attrs.replace(/style=(["'])(.*?)\1/i, (_styleMatch, quote, styleValue) => (
-          ` style=${quote}${styleValue};font-family:'Albert Sans',Arial,Helvetica,sans-serif;${quote}`
-        ))}>`;
-      }
-      return `<${tag}${attrs} style="font-family:'Albert Sans',Arial,Helvetica,sans-serif;">`;
-    })
-    .replace(/<(h1|h2|h3)\b([^>]*?)>/gi, (match, tag, attrs) => {
-      if (/style\s*=/i.test(attrs)) {
-        return `<${tag}${attrs.replace(/style=(["'])(.*?)\1/i, (_styleMatch, quote, styleValue) => (
-          ` style=${quote}${styleValue};font-family:'League Spartan',Arial,Helvetica,sans-serif;${quote}`
-        ))}>`;
-      }
-      return `<${tag}${attrs} style="font-family:'League Spartan',Arial,Helvetica,sans-serif;">`;
-    });
+  const setFont = (markup, tags, family) => markup.replace(new RegExp(`<(${tags})\\b([^>]*?)>`, 'gi'), (_match, tag, attrs) => {
+    if (/data-mail-typography=["']true["']/i.test(attrs)) return `<${tag}${attrs}>`;
+    if (/data-mail-font-choice=["'](?:Albert Sans|League Spartan)["']/i.test(attrs)) return `<${tag}${attrs}>`;
+    const font = `font-family:'${family}',Arial,Helvetica,sans-serif;`;
+    if (/style\s*=/i.test(attrs)) {
+      return `<${tag}${attrs.replace(/style=(["'])(.*?)\1/i, (_style, quote, value) => `style=${quote}${value.replace(/font-family\s*:[^;]*(;|$)/gi, '')};${font}${quote}`)}>`;
+    }
+    return `<${tag}${attrs} style="${font}">`;
+  });
+  const body = setFont(String(html || ''), 'body|table|p|div|li|span|td|ul|ol|a', 'Albert Sans');
+  // Inline descendants must not override the heading font through inheritance.
+  return body.replace(/<(h[1-6])\b([^>]*)>([\s\S]*?)<\/\1>/gi, (_match, tag, attrs, content) =>
+    setFont(`<${tag}${attrs}>${setFont(content, 'span|a|strong|b|em|i', 'League Spartan')}</${tag}>`, 'h[1-6]', 'League Spartan'));
+}
+
+function includeEmailFonts(html) {
+  // Direct Google font URLs work without an external stylesheet import.
+  // No font files are attached or embedded in the message.
+  const fonts = `<style data-mailbot-fonts="true">@font-face{font-family:'Albert Sans';font-style:normal;font-weight:400;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHq5P_rA.ttf) format('truetype');}
+@font-face{font-family:'Albert Sans';font-style:normal;font-weight:600;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHdZT_rA.ttf) format('truetype');}
+@font-face{font-family:'Albert Sans';font-style:normal;font-weight:700;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHTJT_rA.ttf) format('truetype');}
+@font-face{font-family:'Albert Sans';font-style:normal;font-weight:800;src:url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHK5T_rA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:400;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvM_oTpBA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:600;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMIIPpBA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:700;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMGYPpBA.ttf) format('truetype');}
+@font-face{font-family:'League Spartan';font-style:normal;font-weight:800;src:url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMfoPpBA.ttf) format('truetype');}@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHq5L_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHK5P_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSH9ZP_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHmZP_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Albert Sans';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/albertsans/v4/i7dZIFdwYjGaAMFtZd_QA3xXSKZqhr-TenSHApT_rA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 100;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvM_oXpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 200;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMfoTpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMoITpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMzITpBA.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'League Spartan';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url(https://fonts.gstatic.com/s/leaguespartan/v15/kJEnBuEW6A0lliaV_m88ja5Twtx8BWhtkDVmjZvMV4PpBA.ttf) format('truetype');
+}
+</style>`;
+  const clean = String(html).replace(/<style\b[^>]*data-mailbot-fonts=["']true["'][^>]*>[\s\S]*?<\/style>/gi, '');
+  return /<\/head>/i.test(clean) ? clean.replace(/<\/head>/i, `${fonts}</head>`) : fonts + clean;
 }
 
 function tokenPlaceholder(index) {
@@ -478,8 +588,22 @@ function renderHtmlContent(template, recipient) {
   working = working.replace(/button\{\{\s*([^,}]+)\s*,\s*([^,}]+?)(?:\s*,\s*([a-z]+))?\s*\}\}/gi, (_, rawLabel, rawTarget, variant) => (
     pushToken(renderButtonMarkup(rawLabel, rawTarget, recipient, "html", variant || "gradient"))
   ));
+  working = working.replace(/href=(["'])\{\{\s*([^}]+)\s*\}\}\1/gi, (_match, quote, rawTarget) => {
+    const href = normalizeLinkTarget(resolveButtonTarget(rawTarget, recipient), recipient);
+    return `href=${quote}${escapeHtml(href)}${quote}`;
+  });
   working = working.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, rawKey) => pushToken(renderVariableValue(rawKey, recipient)));
   return working.replace(/%%MAILBOTE_TOKEN_(\d+)%%/g, (_, rawIndex) => tokens[Number(rawIndex)] || "");
+}
+
+function constrainLogoDimensions(html) {
+  return String(html || "").replace(/<img\b[^>]*>/gi, tag => {
+    if (!/LOGO_V6-ICON(?:%2B|\+)TUM_SOCIAL_CLUB-single_line-dark_text\.svg/i.test(tag)) return tag;
+    let fixed = tag.replace(/\sheight=["'][^"']*["']/i, '').replace(/<img\b/i, '<img height="26"');
+    if (/style=["']/i.test(fixed)) fixed = fixed.replace(/style=(["'])(.*?)\1/i, (_all, quote, css) => `style=${quote}${css.replace(/(?:^|;)\s*(?:max-)?height\s*:[^;]*/gi, '')};height:26px;max-height:26px;${quote}`);
+    else fixed = fixed.replace(/<img\b/i, '<img style="height:26px;max-height:26px;"');
+    return fixed;
+  });
 }
 
 function renderHtmlMessage(designTemplate, contentTemplate, recipient) {
@@ -496,7 +620,7 @@ function renderHtmlMessage(designTemplate, contentTemplate, recipient) {
   const font = String(designTemplate).match(/data-mail-font="(serif|sans)"/)?.[1];
   if (accent) result = result.replaceAll("#0a2d57", accent);
   if (font === "serif") result = result.replaceAll("'Albert Sans',Arial,Helvetica,sans-serif", "Georgia,serif").replaceAll("'League Spartan',Arial,Helvetica,sans-serif", "Georgia,serif");
-  return result;
+  return includeEmailFonts(constrainLogoDimensions(result));
 }
 
 function insertVariableAtCursor(variableName) {
@@ -519,7 +643,7 @@ function insertVariableAtCursor(variableName) {
 function updateEditorVariables() {
   if (!elements.editorVariables) return;
   const variableNames = Array.from(new Set(
-    recipientColumns.map((column) => String(column.label || column.key || "").trim()).filter(Boolean)
+    recipientColumns.map((column) => String(column.key || column.label || "").trim()).filter(Boolean)
   ));
 
   for (const defaultVariable of ["name", "firstName", "lastName", "email"]) {
@@ -541,7 +665,7 @@ function updateEditorVariables() {
 
   if (elements.recipientVariableWarning) {
     const invalidLabels = recipientColumns
-      .map((column) => String(column.label || "").trim())
+      .map((column) => String(column.key || "").trim())
       .filter(Boolean)
       .filter((label) => !isConformVariableLabel(label));
 
@@ -625,12 +749,14 @@ function collectDraft() {
   const draftName = String(elements.draftName.value || "").trim() || "Untitled draft";
   return {
     draftName,
+    tableName: normalizeTableName(elements.tableName?.value),
     accountEmail: elements.accountEmail.value.trim(),
     authMode: elements.authMode.value,
     smtpSecurity: elements.smtpSecurity.value,
     fromName: elements.fromName.value.trim(),
     recipientColumns,
     recipients,
+    audienceSource,
     subject: elements.subject.value,
     body: elements.body.value,
     htmlBody: elements.htmlBody.value,
@@ -656,6 +782,7 @@ function readDraftCollection() {
 
 function writeDraftCollection(collection) {
   localStorage.setItem(draftCollectionStorageKey, JSON.stringify(collection));
+  persistCollection("drafts", collection).then(() => setSaveStatus("Saved to this computer. The app password was not saved.")).catch(() => setSaveStatus("Saved in this browser only. Disk save failed; retry saving."));
 }
 
 function setSelectedDraftName(name) {
@@ -717,6 +844,7 @@ function readTableCollection() {
 
 function writeTableCollection(collection) {
   localStorage.setItem(tableCollectionStorageKey, JSON.stringify(collection));
+  persistCollection("lists", collection).then(() => setTableSaveStatus("List saved to this computer.")).catch(() => setTableSaveStatus("Saved in this browser only. Disk save failed; retry saving."));
 }
 
 function setSelectedTableName(name) {
@@ -746,6 +874,7 @@ function updateTableSelectOptions(selectedName = "") {
     elements.tableSelect.innerHTML = '<option value="">No saved lists</option>';
     elements.tableSelect.value = "";
     if (elements.deleteTableButton) elements.deleteTableButton.disabled = true;
+    document.dispatchEvent(new CustomEvent('mailbot:lists-changed'));
     return;
   }
 
@@ -754,6 +883,7 @@ function updateTableSelectOptions(selectedName = "") {
     .join("");
   elements.tableSelect.value = activeName;
   if (elements.deleteTableButton) elements.deleteTableButton.disabled = false;
+  document.dispatchEvent(new CustomEvent('mailbot:lists-changed'));
 }
 
 function formatSavedAt(value) {
@@ -791,6 +921,7 @@ function collectTableState() {
     tableName: normalizeTableName(elements.tableName?.value),
     recipientColumns,
     recipients,
+    audienceSource,
     savedAt: new Date().toISOString()
   };
 }
@@ -823,7 +954,8 @@ function queueAutosave() {
   }, autosaveDelayMs);
 }
 
-function hydrateRecipientData(columns, rows) {
+function hydrateRecipientData(columns, rows, source = null) {
+  audienceSource = source;
   recipientColumns = Array.isArray(columns) && columns.length
     ? columns.map((column) => ({
       key: String(column.key || slugifyHeader(column.label || column.key || "property")).trim(),
@@ -842,11 +974,12 @@ function applyTableState(table, showStatus = true) {
     if (elements.tableName) {
       elements.tableName.value = normalizeTableName(table.tableName);
     }
-    hydrateRecipientData(table.recipientColumns, table.recipients);
+    hydrateRecipientData(table.recipientColumns, table.recipients, table.audienceSource);
     updateTable();
     updatePreview();
     updateTableSelectOptions(normalizeTableName(table.tableName));
     setSelectedTableName(table.tableName);
+    document.dispatchEvent(new CustomEvent('mailbot:list-loaded', { detail: { source: audienceSource } }));
     if (showStatus) {
       setTableSaveStatus(`List loaded: ${formatSavedAt(table.savedAt)}`);
     }
@@ -888,7 +1021,6 @@ function deleteTableState() {
     writeTableCollection(collection);
     const remainingNames = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
     const nextName = remainingNames[0] || "Default list";
-    if (elements.tableName) elements.tableName.value = nextName;
     updateTableSelectOptions(nextName);
     setSelectedTableName(nextName);
     setTableSaveStatus(`List "${selectedName}" deleted.`);
@@ -903,6 +1035,7 @@ function applyDraft(draft, showStatus = true) {
   try {
     isHydratingDraft = true;
     elements.draftName.value = normalizeDraftName(draft.draftName);
+    if (elements.tableName && (draft.tableName || draft.audienceSource)) elements.tableName.value = draft.tableName || getSelectedTableName() || "Notion audience";
     elements.accountEmail.value = draft.accountEmail || "";
     elements.authMode.value = draft.authMode === "xoauth2" ? "xoauth2" : "appPassword";
     elements.smtpSecurity.value = draft.smtpSecurity === "starttls587" ? "starttls587" : "ssl465";
@@ -915,7 +1048,7 @@ function applyDraft(draft, showStatus = true) {
     previewIndex = 0;
 
     if (Array.isArray(draft.recipients) && draft.recipients.length) {
-      hydrateRecipientData(draft.recipientColumns, draft.recipients);
+      hydrateRecipientData(draft.recipientColumns, draft.recipients, draft.audienceSource);
     } else {
       recipients = parseRecipients(draft.rawRecipients || "");
       syncRawRecipientsFromTable();
@@ -987,6 +1120,8 @@ function removeRecipient(index) {
 }
 
 function addRecipient() {
+  recipientEditing = true;
+  document.querySelector("#editTableMode").checked = true;
   const emptyRecipient = Object.fromEntries(recipientColumns.map((column) => [column.key, ""]));
   recipients.push(ensureRequiredRecipientFields(emptyRecipient));
   syncRawRecipientsFromTable();
@@ -996,7 +1131,7 @@ function addRecipient() {
 }
 
 function addColumn() {
-  const rawLabel = window.prompt("Name der neuen Property", "interviewLink");
+  const rawLabel = window.prompt("New column name", "interviewLink");
   if (!rawLabel) return;
   const label = rawLabel.trim();
   if (!label) return;
@@ -1120,12 +1255,39 @@ function applyPastedRecipientTable(startRow, startColumnIndex, text) {
   return true;
 }
 
+function recipientField(recipient, label) {
+  const column = recipientColumns.find(c => c.label.toLowerCase() === label.toLowerCase());
+  return String(recipient[column?.key || label] || '');
+}
+
+function recipientApplication(recipient) {
+  const complete = recipientField(recipient, 'Completed applications');
+  const partial = recipientField(recipient, 'Incomplete applications');
+  return [complete ? `${complete} · completed` : '', partial ? `${partial} · incomplete` : ''].filter(Boolean).join('; ') || '—';
+}
+
 function updateTable() {
-  elements.recipientCount.textContent = `${recipients.length} valid`;
+  const purposeNames = {deadline:'Application deadline',newsletter:'Newsletter',recruiting:'Recruiting invitation',reminder:'Application reminder',browse:'Contact review'};
+  const audienceContext = document.querySelector('#audienceContext');
+  if (audienceContext) audienceContext.textContent = audienceSource
+    ? `Notion snapshot · ${purposeNames[audienceSource.purpose] || 'Saved audience'} · updated ${formatSavedAt(audienceSource.loadedAt)}${audienceSource.purpose === 'browse' ? ' · Review only' : ''}`
+    : recipients.length ? 'Local list · Saved with this campaign' : 'Notion, a saved list, or a CSV import.';
+  const audienceName = document.querySelector('#activeAudienceName');
+  if (audienceName) audienceName.textContent = recipients.length || audienceSource ? normalizeTableName(elements.tableName?.value) : 'No recipients selected';
+  const changeButton = document.querySelector('#changeRecipients');
+  if (changeButton) { changeButton.textContent = recipients.length ? 'Change audience' : 'Choose recipients'; changeButton.classList.toggle('primary', !recipients.length); }
+  const refresh = document.querySelector('#refreshAudience'); if (refresh) refresh.hidden = !audienceSource?.sourceId;
+  const save = document.querySelector('#openSaveList'); if (save) save.disabled = !recipients.length;
+  if (elements.addRecipientButton) { elements.addRecipientButton.disabled = Boolean(audienceSource?.sourceId); elements.addRecipientButton.title = audienceSource?.sourceId ? 'Add new contacts in Notion, then refresh this audience.' : ''; }
+  elements.recipientCount.textContent = `${recipients.length} recipients`;
   elements.duplicateCount.textContent = `${parseStats.duplicates} duplicates`;
   elements.invalidCount.textContent = `${parseStats.invalid} invalid`;
-  if (elements.summaryRecipientCount) {
-    elements.summaryRecipientCount.textContent = String(recipients.length);
+  if (elements.summaryRecipientCount) elements.summaryRecipientCount.textContent = String(recipients.length);
+  if (!recipientEditing) {
+    elements.recipientHead.innerHTML = '<tr><th>Name</th><th>Email</th><th>Lists</th><th><span class="sr-only">Contact details</span></th></tr>';
+    elements.recipientRows.innerHTML = recipients.length ? recipients.map((row,index)=>`<tr><td>${escapeHtml(row.name || '—')}</td><td>${escapeHtml(row.email)}</td><td><div class="contact-list-tags">${(recipientField(row,'Lists') || [recipientApplication(row),recipientField(row,'Origins')].filter(x=>x&&x!=='—').join('; ') || 'Local list').split('; ').map(tag=>`<span>${escapeHtml(tag)}</span>`).join('')}</div></td><td><button type="button" class="ghost" data-contact-details="${index}" aria-label="Details for ${escapeHtml(row.name || row.email)}">Details</button></td></tr>`).join('') : '<tr><td colspan="4" class="empty-table">Choose recipients to build this campaign’s audience.</td></tr>';
+    updateEditorVariables();
+    return;
   }
 
   elements.recipientHead.innerHTML = `
@@ -1206,7 +1368,7 @@ function updatePreview() {
       );
       if (contentHeight) messagePreview.style.height = `${contentHeight}px`;
     };
-    messagePreview.srcdoc = renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>";
+    messagePreview.srcdoc = previewHtmlWithLocalSocialIcons(renderedHtml) || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>";
   }
   elements.previewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "No recipient";
   elements.previewSubject.textContent = renderTemplate(elements.subject.value, recipient);
@@ -1222,7 +1384,7 @@ function updatePreview() {
     );
     elements.htmlPreview.style.height = `${contentHeight}px`;
   };
-  elements.htmlPreview.srcdoc = previewHtmlWithBlockedImages(renderedHtml || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>");
+  elements.htmlPreview.srcdoc = previewHtmlWithBlockedImages(previewHtmlWithLocalSocialIcons(renderedHtml) || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>");
 
   const canSend = Boolean(
     emailPattern.test(elements.accountEmail.value.trim())
@@ -1233,9 +1395,9 @@ function updatePreview() {
       && recipients.length
   );
   elements.testButton.disabled = sending || !canSend || !emailPattern.test(document.querySelector("#testEmail").value.trim());
-  elements.sendButton.disabled = sending || !canSend;
+  elements.sendButton.disabled = serverSendActive || sending || !canSend || audienceSource?.purpose === "browse";
   if (elements.summaryReady) {
-    elements.summaryReady.textContent = canSend ? "Yes" : "No";
+    elements.summaryReady.textContent = canSend && audienceSource?.purpose !== "browse" ? "Yes" : "No";
   }
   if (studioReady) syncStudio();
 }
@@ -1279,6 +1441,9 @@ async function testAuth() {
 }
 
 function parseCurrentInput() {
+  audienceSource = null;
+  // A new import must not inherit a previous Notion list's column order.
+  recipientColumns = [...defaultRecipientColumns];
   recipients = parseRecipients(elements.rawRecipients.value);
   syncRawRecipientsFromTable();
   updateTable();
@@ -1310,11 +1475,13 @@ async function send(testOnly) {
         authMode: elements.authMode.value,
         smtpSecurity: elements.smtpSecurity.value,
         fromName: elements.fromName.value.trim(),
+        draftName: elements.draftName.value.trim(),
         subject: elements.subject.value,
       body: elements.body.value,
         htmlBody: elements.htmlBody.value,
         recipientColumns,
         recipients,
+        audienceSource,
         delayMs: Number(elements.delayMs.value),
         testOnly,
         testEmail,
@@ -1324,17 +1491,20 @@ async function send(testOnly) {
     const payload = await response.json();
 
     if (!response.ok) {
-      showLogs(payload.trace || [], "Send failed.");
+      showLogs(payload.trace || [], payload.error ? `Send blocked: ${payload.error}` : "Send failed.");
       throw new Error(payload.error || "Send failed.");
     }
 
     const failed = payload.results.filter((result) => !result.ok);
+    const auditWarnings = payload.results.filter(result => result.auditWarning);
     const lastTrace = payload.results.find((result) => result.trace?.length)?.trace || payload.trace || [];
     showLogs(lastTrace, failed.length ? "SMTP trace contains an error." : "SMTP trace successful.");
     if (failed.length) {
       setStatus(`${payload.sent}/${payload.total} sent. Failed for: ${failed.map((item) => item.email).join(", ")}`, "error");
+    } else if (auditWarnings.length) {
+      setStatus(`${payload.sent}/${payload.total} sent. Notion history needs synchronization for ${auditWarnings.length} emails. Do not resend.`, 'error');
     } else {
-      setStatus(`${payload.sent}/${payload.total} sent successfully.`, "ok");
+      setStatus(`${payload.sent}/${payload.total} sent successfully.${payload.skipped ? ` ${payload.skipped} already sent emails skipped.` : ''}`, "ok");
     }
   } catch (error) {
     setStatus(error.message, "error");
@@ -1346,19 +1516,33 @@ async function send(testOnly) {
 
 elements.parseButton.addEventListener("click", () => {
   parseCurrentInput();
+  elements.tableName.value = 'Imported recipients';
+  updateTable();
+  document.querySelector('#audienceDialog').close();
   queueAutosave();
 });
 
 elements.addRecipientButton.addEventListener("click", addRecipient);
 
-elements.saveTableButton?.addEventListener("click", () => {
-  const saved = saveTableState();
-  setStatus(saved ? "Recipient list saved." : "Could not save the list.", saved ? "ok" : "error");
+elements.saveTableButton?.addEventListener('click', () => {
+  if (!pendingReusableList) return;
+  const name = normalizeTableName(document.querySelector('#reusableListName').value);
+  try {
+    const table = {...pendingReusableList,tableName:name,savedAt:new Date().toISOString()};
+    const collection = readTableCollection(); collection[name] = table; writeTableCollection(collection);
+    updateTableSelectOptions(name); setSelectedTableName(name);
+    if (pendingListIsCurrent) { elements.tableName.value = name; updateTable(); saveDraft(); }
+    document.querySelector('#saveListDialog').close();
+    setTableSaveStatus(`Saved reusable list: ${name}`); setStatus('Reusable list saved locally.','ok');
+  } catch { setStatus('Could not save the list. Check browser storage and retry.','error'); }
 });
 
-elements.loadTableButton?.addEventListener("click", () => {
+elements.loadTableButton?.addEventListener('click', () => {
+  const selected = readTableCollection()[elements.tableSelect.value];
+  if (selected?.audienceSource?.purpose === 'browse') { document.dispatchEvent(new CustomEvent('mailbot:review-list-selected', {detail:{source:selected.audienceSource}})); return; }
   const loaded = loadTableState(true);
-  setStatus(loaded ? "Recipient list loaded." : "Could not load the list.", loaded ? "ok" : "error");
+  if (loaded) { document.querySelector('#audienceDialog').close(); saveDraft(); activatePage('recipients'); }
+  setStatus(loaded ? 'Saved audience attached to this campaign.' : 'Could not load the list.', loaded ? 'ok' : 'error');
 });
 
 elements.deleteTableButton?.addEventListener("click", () => {
@@ -1370,6 +1554,7 @@ elements.clearButton.addEventListener("click", () => {
   elements.rawRecipients.value = "";
   recipientColumns = [...defaultRecipientColumns];
   recipients = [];
+  audienceSource = null;
   parseStats = { invalid: 0, duplicates: 0 };
   updateTable();
   updatePreview();
@@ -1390,6 +1575,33 @@ elements.loadDraftButton.addEventListener("click", () => {
   setStatus(loaded ? "Saved data loaded." : "No saved data found.", loaded ? "ok" : "error");
 });
 
+elements.importDraftButton.addEventListener("click", () => elements.draftJsonFile.click());
+elements.draftJsonFile.addEventListener("change", async () => {
+  const file = elements.draftJsonFile.files?.[0];
+  elements.draftJsonFile.value = "";
+  if (!file) return;
+  try {
+    const draft = JSON.parse(await file.text());
+    if (!draft || typeof draft !== "object" || !draft.draftName) throw new Error("This file is not a Mailbot draft JSON.");
+    if (!applyDraft(draft, false)) throw new Error("Mailbot could not load this draft.");
+    saveDraft();
+    activatePage("message");
+    setStatus("Imported CLI draft “" + draft.draftName + "”. Re-enter sender credentials if needed.", "ok");
+  } catch (error) {
+    setStatus(error.message || "Could not import this draft.", "error");
+  }
+});
+elements.exportDraftButton.addEventListener("click", () => {
+  const content = JSON.stringify(collectDraft(), null, 2);
+  const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = (elements.draftName.value.trim() || "mailbot-draft").replace(/[^a-z0-9._-]+/gi, "-") + ".json";
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus("Draft JSON exported without account credentials.", "ok");
+});
+
 elements.deleteDraftButton.addEventListener("click", () => {
   const deleted = deleteDraft();
   setStatus(deleted ? "Saved draft deleted." : "Could not delete the draft.", deleted ? "ok" : "error");
@@ -1405,8 +1617,7 @@ elements.csvFile.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
   elements.rawRecipients.value = await file.text();
-  parseCurrentInput();
-  queueAutosave();
+  setStatus('CSV ready. Choose “Use imported recipients” to attach it.');
 });
 
 elements.editorVariables?.addEventListener("click", (event) => {
@@ -1509,15 +1720,6 @@ elements.draftSelect.addEventListener("change", () => {
   loadDraft(true);
 });
 
-elements.tableSelect?.addEventListener("change", () => {
-  const selectedName = normalizeTableName(elements.tableSelect.value);
-  if (selectedName && elements.tableName) {
-    elements.tableName.value = selectedName;
-    setSelectedTableName(selectedName);
-    loadTableState(false);
-  }
-});
-
 [elements.authMode, elements.smtpSecurity].forEach((element) => {
   element.addEventListener("change", () => {
     updateAuthUi();
@@ -1526,11 +1728,6 @@ elements.tableSelect?.addEventListener("change", () => {
   });
 });
 
-elements.rawRecipients.addEventListener("paste", () => {
-  window.setTimeout(() => {
-    parseCurrentInput();
-  }, 0);
-});
 elements.delayMs.addEventListener("change", queueAutosave);
 elements.testButton.addEventListener("click", () => send(true));
 elements.sendButton.addEventListener("click", () => send(false));
@@ -1539,6 +1736,11 @@ elements.clearLogsButton.addEventListener("click", () => {
   elements.smtpLogs.textContent = 'No SMTP logs yet. Use “Test connection” or send a test email.';
 });
 
+try {
+  const workspaceStorage = await import('./workspace-store.js');
+  persistCollection = workspaceStorage.persistCollection;
+  await workspaceStorage.restoreWorkspace({ drafts: draftCollectionStorageKey, lists: tableCollectionStorageKey });
+} catch { setSaveStatus("Disk storage is unavailable. Browser copies are still available; retry saving when the server is running."); }
 updateAuthUi();
 updateDraftSelectOptions(getSelectedDraftName());
 updateTableSelectOptions(getSelectedTableName());
@@ -1592,12 +1794,20 @@ function syncVisualEditor() {
   if (editor.dataset.source !== elements.body.value) {
     editor.innerHTML = visualHtml(elements.body.value);
     editor.dataset.source = elements.body.value;
+    editorUndo.length = 0; editorRedo.length = 0; recordEditorHistory();
   }
 }
 
 function commitVisualEditor() {
+  recordEditorHistory();
   const editor = document.querySelector('#visualEditor');
   const clone = editor.cloneNode(true);
+  // Browser formatting commands can leave empty wrappers behind.
+  [...clone.querySelectorAll('span')].reverse().forEach(span => {
+    const choice = span.dataset.mailFontChoice;
+    if (['Albert Sans','League Spartan'].includes(choice)) span.style.fontFamily = `'${choice}',Arial,Helvetica,sans-serif`;
+    if (!span.getAttribute('style')?.trim() && !choice && [...span.attributes].every(attr=>['style','data-mail-typography'].includes(attr.name))) span.replaceWith(...span.childNodes);
+  });
   const macros = [];
   clone.querySelectorAll('.mail-button').forEach(el => { const index = macros.push(`button{{${el.dataset.label},${el.dataset.target},${el.dataset.variant || 'gradient'}}}`) - 1; el.replaceWith(document.createComment(`mail-button-${index}`)); });
   elements.body.value = clone.innerHTML.replace(/<!--mail-button-(\d+)-->/g, (_,index) => macros[Number(index)]);
@@ -1606,9 +1816,64 @@ function commitVisualEditor() {
   queueAutosave();
 }
 
+function editorSnapshot() {
+  const editor = document.querySelector('#visualEditor');
+  const selection = window.getSelection();
+  const offsets = [];
+  if (selection.rangeCount && editor.contains(selection.anchorNode) && editor.contains(selection.focusNode)) {
+    for (const [node, offset] of [[selection.anchorNode, selection.anchorOffset], [selection.focusNode, selection.focusOffset]]) {
+      const range = document.createRange(); range.selectNodeContents(editor); range.setEnd(node, offset); offsets.push(range.toString().length);
+    }
+  }
+  return {html:editor.innerHTML, offsets};
+}
+function recordEditorHistory() {
+  if (restoringEditorHistory) return;
+  const snapshot = editorSnapshot();
+  if (editorUndo.at(-1)?.html === snapshot.html) return;
+  editorUndo.push(snapshot); if (editorUndo.length > 200) editorUndo.shift(); editorRedo.length = 0;
+}
+function travelEditorHistory(redo = false) {
+  const editor = document.querySelector('#visualEditor');
+  if (!redo && editorUndo.length < 2 || redo && !editorRedo.length) return;
+  if (redo) editorUndo.push(editorRedo.pop()); else editorRedo.push(editorUndo.pop());
+  const snapshot = editorUndo.at(-1);
+  restoringEditorHistory = true;
+  editor.innerHTML = snapshot.html; editor.focus();
+  const locate = offset => {
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT); let node;
+    while ((node = walker.nextNode())) { if (offset <= node.length) return [node,offset]; offset -= node.length; }
+    return [editor,editor.childNodes.length];
+  };
+  if (snapshot.offsets.length === 2) window.getSelection().setBaseAndExtent(...locate(snapshot.offsets[0]), ...locate(snapshot.offsets[1]));
+  rememberEditorSelection(); commitVisualEditor(); restoringEditorHistory = false;
+}
+function syncTypographyToolbar() {
+  const editor = document.querySelector('#visualEditor'), selection = window.getSelection();
+  if (!selection.rangeCount || !editor.contains(selection.anchorNode)) return;
+  const range = selection.getRangeAt(0), nodes = [];
+  if (range.collapsed) nodes.push(selection.anchorNode.nodeType === 1 ? selection.anchorNode : selection.anchorNode.parentElement);
+  else {
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let node; while ((node = walker.nextNode())) if (node.textContent.trim() && range.intersectsNode(node)) nodes.push(node.parentElement);
+  }
+  if (!nodes.length) return;
+  const styles = nodes.map(node => getComputedStyle(node));
+  const fields = [['editorFont', style=>style.fontFamily.split(',')[0].replace(/["']/g,'').trim()], ['editorFontSize', style=>String(Math.round(parseFloat(style.fontSize)))], ['editorFontWeight', style=>style.fontWeight === 'normal' ? '400' : style.fontWeight === 'bold' ? '700' : style.fontWeight]];
+  for (const [id,read] of fields) {
+    const control = document.getElementById(id), values = [...new Set(styles.map(read))];
+    if (document.activeElement === control) continue;
+    control.value = values.length === 1 ? values[0] : '';
+    control.title = values.length > 1 ? 'Mixed formatting' : values[0];
+    if (control.tagName === 'INPUT') control.placeholder = values.length > 1 ? 'Mixed' : '';
+  }
+  document.querySelectorAll('[data-format="bold"],[data-format="italic"]').forEach(button=>button.setAttribute('aria-pressed',String(document.queryCommandState(button.dataset.format))));
+}
+
 function rememberEditorSelection() {
   const selection = window.getSelection();
   if (selection.rangeCount && document.querySelector('#visualEditor').contains(selection.anchorNode)) savedEditorRange = selection.getRangeAt(0).cloneRange();
+  syncTypographyToolbar();
 }
 
 function restoreEditorSelection() {
@@ -1646,7 +1911,7 @@ function withClubLogo(template) {
   let result = template;
   if (!result.includes(clubEmailLogoUrl)) {
     result = result.replace(/(<td\b(?=[^>]*class="[^"]*\blogo-container\b)[^>]*>)[\s\S]*?(<\/td>)/i,
-      `$1<img src="${clubEmailLogoUrl}" width="320" alt="TUM Social AI Club" style="display:block;width:320px;max-width:100%;height:auto;border:0;">$2`);
+      `$1<img src="${clubEmailLogoUrl}" width="320" height="26" alt="TUM Social AI Club" style="display:block;width:320px;max-width:100%;height:26px;max-height:26px;border:0;">$2`);
   }
   return result
     .replace('.logo-container { padding: 12px 20px !important; }', '.logo-container { height:66px !important; padding:0 16px !important; }')
@@ -1660,7 +1925,7 @@ function withClubLogo(template) {
 function buildDesignTemplate() {
   const d = readDesignSettings();
   const card = d.layout === 'card';
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><style>body{margin:0}p{line-height:1.7;margin:0 0 20px}h2{font-size:24px;line-height:1.3;margin:0 0 22px}a{color:${d.accent}}@media(max-width:480px){.mail-content{padding:24px 20px!important}.mail-outer{padding:12px 0!important}}</style></head><body data-mail-accent="${d.accent}" data-mail-font="${d.font.includes('Georgia')?'serif':'sans'}" style="margin:0;background:${card?d.background:'#ffffff'};font-family:${d.font};color:#303830"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td class="mail-outer" style="padding:${card?'32px 12px':'16px 0'}"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:${d.width}px;margin:auto;background:white;${card?'border-radius:12px;':''}"><tr><td height="66" style="height:66px;padding:0 16px;vertical-align:middle;background:#fff;border:1px solid rgba(10,45,87,0.10);border-radius:24px;border-collapse:separate;overflow:hidden;box-shadow:0 4px 12px rgba(10,45,87,0.06)"><img src="${clubEmailLogoUrl}" width="320" alt="TUM Social AI Club" style="display:block;width:320px;max-width:100%;height:auto;border:0"></td></tr><tr><td height="16" style="height:16px;line-height:16px;font-size:0">&nbsp;</td></tr><tr><td class="mail-content" style="padding:${d.padding}px;font-size:15px;border:1px solid rgba(10,45,87,0.08);border-radius:24px;box-shadow:0 8px 20px rgba(10,45,87,0.06)">{{content}}</td></tr></table></td></tr></table></body></html>`;
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><style>body{margin:0}p{line-height:1.7;margin:0 0 20px}h2{font-size:24px;line-height:1.3;margin:0 0 22px}a{color:${d.accent}}@media(max-width:480px){.mail-content{padding:24px 20px!important}.mail-outer{padding:12px 0!important}}</style></head><body data-mail-accent="${d.accent}" data-mail-font="${d.font.includes('Georgia')?'serif':'sans'}" style="margin:0;background:${card?d.background:'#ffffff'};font-family:${d.font};color:#303830"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td class="mail-outer" style="padding:${card?'32px 12px':'16px 0'}"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:${d.width}px;margin:auto;background:white;${card?'border-radius:12px;':''}"><tr><td height="66" style="height:66px;padding:0 16px;vertical-align:middle;background:#fff;border:1px solid rgba(10,45,87,0.10);border-radius:24px;border-collapse:separate;overflow:hidden;box-shadow:0 4px 12px rgba(10,45,87,0.06)"><img src="${clubEmailLogoUrl}" width="320" height="26" alt="TUM Social AI Club" style="display:block;width:320px;max-width:100%;height:26px;max-height:26px;border:0"></td></tr><tr><td height="16" style="height:16px;line-height:16px;font-size:0">&nbsp;</td></tr><tr><td class="mail-content" style="padding:${d.padding}px;font-size:15px;border:1px solid rgba(10,45,87,0.08);border-radius:24px;box-shadow:0 8px 20px rgba(10,45,87,0.06)">{{content}}</td></tr></table></td></tr></table></body></html>`;
 }
 
 function updateDesignPreview() {
@@ -1675,6 +1940,7 @@ function syncStudio() {
   if (select.innerHTML !== options) select.innerHTML = options;
   select.value = String(previewIndex);
   const checks = [
+    ...(!audienceSource ? [] : [[audienceSource.purpose !== 'browse', 'Notion sending purpose selected; eligibility rechecked before delivery', 'Review-only Notion list: choose a sending purpose']]),
     [emailPattern.test(elements.accountEmail.value.trim()) && !!elements.appPassword.value.trim(),'Sender and credentials added','Set up sender account'],
     [recipients.length > 0,`${recipients.length} recipients in the list`,'Add recipients'],
     [!!elements.subject.value.trim(),'Subject added','Add a subject'],
@@ -1688,6 +1954,18 @@ function initStudio() {
   studioReady = true;
   const editor = document.querySelector('#visualEditor');
   document.addEventListener('selectionchange', rememberEditorSelection);
+  recordEditorHistory();
+  editor.addEventListener('beforeinput',event=>{
+    if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
+      event.preventDefault(); travelEditorHistory(event.inputType === 'historyRedo');
+    }
+  });
+  document.querySelector('#formatToolbar').addEventListener('keydown',event=>{
+    if ((event.metaKey || event.ctrlKey) && ['z','y'].includes(event.key.toLowerCase())) { event.preventDefault(); travelEditorHistory(event.shiftKey || event.key.toLowerCase() === 'y'); }
+  });
+  editor.addEventListener('keydown',event=>{
+    if ((event.metaKey || event.ctrlKey) && ['z','y'].includes(event.key.toLowerCase())) { event.preventDefault(); travelEditorHistory(event.shiftKey || event.key.toLowerCase() === 'y'); }
+  });
   editor.addEventListener('input',commitVisualEditor);
   editor.addEventListener('paste',event=>{
     event.preventDefault();
@@ -1696,7 +1974,34 @@ function initStudio() {
   });
   document.querySelector('#visualMode').addEventListener('click',()=>setEditorMode('visual'));
   document.querySelector('#sourceMode').addEventListener('click',()=>setEditorMode('source'));
-  document.querySelector('#formatToolbar').addEventListener('mousedown',event=>event.preventDefault());
+  document.querySelector('#formatToolbar').addEventListener('mousedown',event=>{
+    if (event.target.closest('button')) event.preventDefault();
+  });
+  const applyTypography = (kind, value) => {
+    restoreEditorSelection();
+    document.execCommand(kind === 'size' ? 'fontSize' : 'fontName', false, kind === 'font' ? value : kind === 'weight' ? 'mailbot-weight' : '7');
+    editor.querySelectorAll(kind === 'size' ? 'font[size="7"]' : kind === 'weight' ? 'font[face="mailbot-weight"]' : 'font[face]').forEach(font => {
+      const span = document.createElement('span');
+      while (font.firstChild) span.appendChild(font.firstChild);
+      if (kind === 'font') {
+        span.dataset.mailFontChoice = value;
+        span.style.fontFamily = `'${value}',Arial,Helvetica,sans-serif`;
+      } else {
+        span.dataset.mailTypography = 'true';
+        if (kind === 'weight') span.style.fontWeight = value;
+        else span.style.fontSize = `${value}px`;
+      }
+      font.replaceWith(span);
+    });
+    rememberEditorSelection();
+    commitVisualEditor();
+  };
+  document.querySelector('#editorFont').addEventListener('change',event=>applyTypography('font',event.target.value));
+  document.querySelector('#editorFontWeight').addEventListener('change',event=>applyTypography('weight',event.target.value));
+  document.querySelector('#editorFontSize').addEventListener('change',event=>{
+    const size = Number(event.target.value);
+    if (Number.isFinite(size) && size >= 1 && size <= 200) applyTypography('size',size);
+  });
   document.querySelector('#insertDivider').addEventListener('click',()=>insertEditorHtml('<hr style="border:0;border-top:1px solid #dbe3ec;margin:24px 0;">'));
   document.querySelectorAll('[data-format]').forEach(button=>button.addEventListener('click',()=>{
     restoreEditorSelection(); document.execCommand(button.dataset.format,false,button.dataset.value || null); commitVisualEditor();
@@ -1749,7 +2054,7 @@ function initStudio() {
     clearTimeout(autosaveTimer);saveDraft();
     const collection=readDraftCollection();let name='New draft';let i=2;while(collection[name])name=`New draft ${i++}`;
     setSelectedDraftName(name);elements.draftName.value=name;elements.subject.value='';elements.body.value='<p>Hi {{firstName}},</p><p><br></p><p>Best,<br>The Social AI Club Team</p>';
-    recipients=[];syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('message');elements.subject.focus();
+    recipients=[];audienceSource=null;elements.tableName.value='Default list';syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('recipients');
   });
   document.querySelector('#deleteDraftButton').addEventListener('click',()=>{
     clearTimeout(autosaveTimer);
@@ -1789,3 +2094,84 @@ function openLinkDialog(kind,button=null) {
   document.querySelector('#deleteLink').hidden=!button;
   document.querySelector('#linkDialog').showModal();
 }
+
+function openReusableList(snapshot = null) {
+  pendingListIsCurrent = !snapshot;
+  pendingReusableList = snapshot || collectTableState();
+  document.querySelector('#reusableListName').value = pendingReusableList.tableName || 'Saved audience';
+  document.querySelector('#reusableListHelp').textContent = `${pendingReusableList.recipients.length} contacts · A local snapshot for future campaigns.`;
+  document.querySelector('#saveListDialog').showModal();
+}
+
+document.querySelector('#audienceDialog').addEventListener('close',syncRawRecipientsFromTable);
+document.querySelector('#openSaveList').addEventListener('click',()=>openReusableList());
+document.querySelector('#editTableMode').addEventListener('change',event=>{recipientEditing=event.target.checked;updateTable();});
+document.querySelector('#designDetails').addEventListener('toggle',event=>{if(event.target.open)updateDesignPreview();});
+for (const button of document.querySelectorAll('[data-close-dialog]')) button.addEventListener('click',()=>document.querySelector('#'+button.dataset.closeDialog).close());
+elements.recipientRows.addEventListener('click',event=>{
+  const button=event.target.closest('[data-contact-details]');if(!button)return;
+  const row=recipients[Number(button.dataset.contactDetails)];if(!row)return;
+  document.querySelector('#contactDialogTitle').textContent=row.name || row.email;
+  document.querySelector('#contactDetails').innerHTML=recipientColumns.map(column=>`<div><dt>${escapeHtml(column.label)}</dt><dd>${escapeHtml(row[column.key] || '—')}</dd></div>`).join('');
+  document.querySelector('#contactDialog').showModal();
+});
+
+import('./notion-ui.js').then(({initNotionBrowser}) => initNotionBrowser({
+  setStatus,
+  getCurrentSource:()=>audienceSource,
+  getSavedLists:()=>readTableCollection(),
+  async renameSavedList(oldName,newName) {
+    const {renameNamedList}=await import('./recipient-views.js');
+    const collection=renameNamedList(readTableCollection(),oldName,newName);
+    const name=String(newName).trim();
+    writeTableCollection(collection);updateTableSelectOptions(name);setSelectedTableName(name);
+    if(elements.tableName.value===oldName){elements.tableName.value=name;updateTable();saveDraft();}
+    setStatus(`List renamed to “${name}”.`,'ok');
+    return name;
+  },
+  saveSnapshot:openReusableList,
+  useSnapshot(snapshot) {
+    hydrateRecipientData(snapshot.recipientColumns, snapshot.recipients, snapshot.audienceSource);
+    elements.tableName.value = snapshot.tableName;
+    updateTable(); updatePreview(); saveDraft();
+    setStatus(`${recipients.length} recipients attached to this campaign.`, 'ok');
+  }
+})).catch(error => setStatus(`Audience selection could not start: ${error.message}`, 'error'));
+uiInitialized = true;
+const initialPage = window.location.hash.slice(1);
+activatePage(['recipients','message','review','contacts','account','preview','send'].includes(initialPage) ? initialPage : 'recipients');
+
+import('./table-layout.js').then(({initContentSizedTables})=>initContentSizedTables());
+
+
+async function refreshSendProgress() {
+  const panel = document.getElementById('sendProgress');
+  if (!panel) return;
+  try {
+    let response = await fetch('/api/send/status', {cache:'no-store'});
+    let progress;
+    if (response.ok) progress = await response.json();
+    if (!response.ok) {
+      response = await fetch('/send-progress.json', {cache:'no-store'});
+      if (!response.ok) return;
+      progress = await response.json();
+    }
+    if (!progress?.total) {
+      const wasActive = serverSendActive; serverSendActive = false; panel.hidden = true;
+      if (wasActive) updatePreview();
+      return;
+    }
+    panel.hidden = false;
+    const stale = Date.now() - Date.parse(progress.lastActivity || progress.updatedAt) > 60000;
+    document.getElementById('sendProgressTitle').textContent = progress.state === 'finished' ? 'Send finished' : progress.state === 'interrupted' ? 'Send interrupted' : stale ? 'No recent progress' : progress.state === 'observing' ? 'Monitoring existing send' : 'Sending in progress';
+    const bar = document.getElementById('sendProgressBar');bar.max=progress.total;bar.value=progress.processed;
+    document.getElementById('sendProgressCounts').textContent = `${progress.sent} sent · ${progress.failed} failed · ${progress.skipped} skipped · ${progress.processed} / ${progress.total} processed`;
+    document.getElementById('sendProgressDetail').textContent = progress.phase || (progress.state === 'observing' ? 'Live delivery journal. A pause may mean the server is waiting for Google or Notion.' : 'SMTP acceptance does not confirm inbox delivery.');
+    const wasActive = serverSendActive;
+    serverSendActive = progress.state === 'running' || progress.state === 'observing';
+    if (serverSendActive) elements.sendButton.disabled = true;
+    else if (wasActive) updatePreview();
+  } catch { if (!panel.hidden) document.getElementById('sendProgressDetail').textContent = 'Connection lost. Send status is unavailable; do not start another send.'; }
+}
+refreshSendProgress();
+setInterval(refreshSendProgress, 2000);

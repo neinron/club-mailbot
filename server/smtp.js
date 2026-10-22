@@ -347,8 +347,12 @@ export async function sendViaGmailSmtp({
       session.socket.write(`${message}.${CRLF}`, (error) => (error ? reject(error) : resolve()));
     });
     await expect(session.readResponse, 250, "Send message", session.log, session.trace);
-    await write(session.socket, "QUIT", session.log);
-    await expect(session.readResponse, 221, "QUIT", session.log, session.trace);
+    // DATA was accepted. A disconnect during QUIT must not turn a sent mail
+    // into a failed result and invite an accidental duplicate retry.
+    try {
+      await write(session.socket, "QUIT", session.log);
+      await expect(session.readResponse, 221, "QUIT", session.log, session.trace);
+    } catch { session.log('S', 'Message accepted; connection closed before QUIT completed.'); }
     return { ok: true, trace: session.trace };
   } catch (error) {
     if (error instanceof SmtpError) throw error;
