@@ -258,3 +258,9 @@ body[data-page="contacts"] #campaignFlow,body[data-page="account"] #campaignFlow
 .recipient-grid td:last-child { position:sticky; right:0; z-index:1; box-shadow:-1px 0 var(--border); }
 .recipient-grid .row-tools { display:table-cell; white-space:nowrap; text-align:center; }
 .recipient-grid th:last-child,.recipient-grid td:last-child { min-width:80px; width:80px; }
+.composer-canvas { display:flex; justify-content:center; padding:28px 20px; background:var(--muted); }
+#composerFrame { display:block; width:680px; max-width:100%; min-height:400px; border:0; background:var(--background); box-shadow:0 2px 16px #00000006; }
+body[data-page="message"] .format-toolbar { position:sticky; top:0; z-index:5; }
+@media(max-width:760px) { .composer-canvas { padding:16px 8px; } }
+body[data-page="message"] .editor-panel { overflow:visible; }
+.composer-canvas { border-radius:0 0 10px 10px; }

@@ -8,6 +8,8 @@ function hasCredentials() { return Boolean(elements.appPassword.value.trim() || 
 const editorUndo = [];
 const editorRedo = [];
 let restoringEditorHistory = false;
+let applyingEditorFormat = false;
+let composerResizeObserver = null;
 let persistCollection = () => Promise.reject(new Error("Storage is not ready."));
 let studioReady = false;
 let editorMode = "visual";
@@ -30,6 +32,8 @@ const defaultRecipientColumns = [
   { key: "email", label: "Email", role: "to" },
   { key: "interviewLink", label: "Interview link", role: "text" }
 ];
+
+const visualEditor = document.querySelector('#visualEditor');
 
 const elements = {
   workspaceTitle: document.querySelector("#workspaceTitle"),
@@ -1457,6 +1461,7 @@ function fitPreviewFrame(frame) {
 function fitVisiblePreviews() {
   fitPreviewFrame(elements.htmlPreview);
   fitPreviewFrame(elements.messageHtmlPreview);
+  fitComposerFrame();
 }
 
 function updatePreview() {
@@ -1926,15 +1931,29 @@ function cleanEditorHtml(html) {
 }
 
 function buttonChip(label, target, variant = 'gradient') {
-  const span = document.createElement('span');
-  span.className = 'mail-button';
-  span.contentEditable = 'false';
-  span.dataset.label = label;
-  span.dataset.target = target;
-  span.dataset.variant = variant;
-  span.textContent = label + ' ↗';
-  span.title = target + ' · Click to edit';
-  return span.outerHTML;
+  const wrapper = document.createElement('div');
+  wrapper.className = 'mail-button';
+  wrapper.contentEditable = 'false';
+  wrapper.dataset.label = label;
+  wrapper.dataset.target = target;
+  wrapper.dataset.variant = variant;
+  wrapper.innerHTML = renderButtonMarkup(label, /^(https?:|mailto:)/i.test(target) ? target : 'https://example.invalid', {}, 'html', variant);
+  wrapper.title = 'Edit button';
+  return wrapper.outerHTML;
+}
+
+// Render the real mail layout while retaining the editable campaign variables.
+function renderUnresolvedMessage(design, content) {
+  const variables = [];
+  const masked = content.replace(/\{\{[^}]+\}\}/g, value => `%%MAILBOT_EDIT_VARIABLE_${variables.push(value)-1}%%`);
+  return renderHtmlMessage(design, masked, {}).replace(/%%MAILBOT_EDIT_VARIABLE_(\d+)%%/g, (_match,index) => variables[Number(index)]);
+}
+
+function fitComposerFrame() {
+  const frame = document.getElementById('composerFrame');
+  if (!frame?.offsetWidth || !frame.contentDocument?.body) return;
+  frame.style.height = '1px';
+  frame.style.height = `${Math.max(frame.contentDocument.documentElement.scrollHeight, frame.contentDocument.body.scrollHeight, 400)}px`;
 }
 
 function visualHtml(source) {
@@ -1944,21 +1963,44 @@ function visualHtml(source) {
 }
 
 function syncVisualEditor() {
-  const editor = document.querySelector('#visualEditor');
-  const darkEmail = /single_line-white_text|club-logo-white\.png/.test(elements.htmlBody.value);
-  editor.style.backgroundColor = darkEmail ? '#0a2d57' : '';
-  editor.style.color = darkEmail ? '#e0eaf7' : '';
-  editor.style.colorScheme = darkEmail ? 'dark' : '';
-  if (editor.dataset.source !== elements.body.value) {
-    editor.innerHTML = previewHtmlWithLocalCommunityPhoto(visualHtml(elements.body.value));
-    editor.dataset.source = elements.body.value;
-    editorUndo.length = 0; editorRedo.length = 0; recordEditorHistory();
-  }
+  const frame = document.getElementById('composerFrame');
+  const source = elements.body.value;
+  const design = elements.htmlBody.value;
+  if (visualEditor.dataset.source === source && frame.dataset.design === design) return;
+  composerResizeObserver?.disconnect();
+  visualEditor.dataset.source = source;
+  frame.dataset.design = design;
+  savedEditorRange = null;
+  document.getElementById('formatToolbar').inert = true;
+  frame.setAttribute('aria-busy','true');
+  const content = `<div id="mailbotEditorSlot">${visualHtml(source)}</div>`;
+  const rendered = renderUnresolvedMessage(design, content);
+  const editorStyles = `<style data-mailbot-editor="true">#visualEditor{outline:none;min-height:200px}#visualEditor:empty:before{content:'Write your email…';opacity:.45}#visualEditor .mail-button{cursor:pointer}#visualEditor .mail-button:hover{outline:1px dashed #7598c3;outline-offset:5px}#visualEditor a{cursor:text}</style>`;
+  frame.onload = () => {
+    const doc = frame.contentDocument;
+    const slot = doc?.getElementById('mailbotEditorSlot');
+    if (!slot) { document.getElementById('formatToolbar').inert=false; frame.setAttribute('aria-busy','false'); return; }
+    document.getElementById('formatToolbar').inert = false;
+    frame.setAttribute('aria-busy','false');
+    visualEditor.removeAttribute('style');
+    visualEditor.innerHTML = slot.innerHTML;
+    slot.replaceWith(doc.adoptNode(visualEditor));
+    doc.addEventListener('selectionchange', rememberEditorSelection);
+    doc.addEventListener('load', fitComposerFrame, true);
+    composerResizeObserver = new ResizeObserver(() => requestAnimationFrame(fitComposerFrame));
+    composerResizeObserver.observe(visualEditor);
+    doc.addEventListener('click', event => { if (event.target.closest('a')) event.preventDefault(); });
+    editorUndo.length = 0; editorRedo.length = 0;
+    recordEditorHistory();
+    fitComposerFrame();
+    doc.fonts?.ready.then(fitComposerFrame);
+  };
+  frame.srcdoc = previewHtmlWithLocalCommunityPhoto(previewHtmlWithLocalSocialIcons(rendered.replace(/<\/head>/i, `${editorStyles}</head>`)));
 }
 
 function commitVisualEditor() {
   recordEditorHistory();
-  const editor = document.querySelector('#visualEditor');
+  const editor = visualEditor;
   const clone = editor.cloneNode(true);
   // Local preview assets must never be saved into outgoing email HTML.
   clone.querySelectorAll('img').forEach(image => {
@@ -1978,17 +2020,18 @@ function commitVisualEditor() {
   for (const [remote, local] of Object.entries(localMailImageAssets())) outgoingEditorHtml = outgoingEditorHtml.replaceAll(`${location.origin}${local}`, remote);
   elements.body.value = outgoingEditorHtml.replace(/<!--mail-button-(\d+)-->/g, (_,index) => macros[Number(index)]);
   editor.dataset.source = elements.body.value;
+  requestAnimationFrame(fitComposerFrame);
   updatePreview();
   queueAutosave();
 }
 
 function editorSnapshot() {
-  const editor = document.querySelector('#visualEditor');
-  const selection = window.getSelection();
+  const editor = visualEditor;
+  const selection = visualEditor.ownerDocument.getSelection();
   const offsets = [];
   if (selection.rangeCount && editor.contains(selection.anchorNode) && editor.contains(selection.focusNode)) {
     for (const [node, offset] of [[selection.anchorNode, selection.anchorOffset], [selection.focusNode, selection.focusOffset]]) {
-      const range = document.createRange(); range.selectNodeContents(editor); range.setEnd(node, offset); offsets.push(range.toString().length);
+      const range = visualEditor.ownerDocument.createRange(); range.selectNodeContents(editor); range.setEnd(node, offset); offsets.push(range.toString().length);
     }
   }
   return {html:editor.innerHTML, offsets};
@@ -2000,31 +2043,43 @@ function recordEditorHistory() {
   editorUndo.push(snapshot); if (editorUndo.length > 200) editorUndo.shift(); editorRedo.length = 0;
 }
 function travelEditorHistory(redo = false) {
-  const editor = document.querySelector('#visualEditor');
+  const editor = visualEditor;
   if (!redo && editorUndo.length < 2 || redo && !editorRedo.length) return;
   if (redo) editorUndo.push(editorRedo.pop()); else editorRedo.push(editorUndo.pop());
   const snapshot = editorUndo.at(-1);
   restoringEditorHistory = true;
   editor.innerHTML = snapshot.html; editor.focus();
-  const locate = offset => {
-    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT); let node;
-    while ((node = walker.nextNode())) { if (offset <= node.length) return [node,offset]; offset -= node.length; }
-    return [editor,editor.childNodes.length];
-  };
-  if (snapshot.offsets.length === 2) window.getSelection().setBaseAndExtent(...locate(snapshot.offsets[0]), ...locate(snapshot.offsets[1]));
+  restoreEditorOffsets(snapshot.offsets);
   rememberEditorSelection(); commitVisualEditor(); restoringEditorHistory = false;
 }
+function restoreEditorOffsets(offsets) {
+  if (offsets.length !== 2) return;
+  const editor = visualEditor;
+  const locate = offset => {
+    const walker = editor.ownerDocument.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) { if (offset < node.length) return [node,offset]; offset -= node.length; }
+    return [editor,editor.childNodes.length];
+  };
+  editor.ownerDocument.getSelection().setBaseAndExtent(...locate(offsets[0]), ...locate(offsets[1]));
+}
+
 function syncTypographyToolbar() {
-  const editor = document.querySelector('#visualEditor'), selection = window.getSelection();
+  const editor = visualEditor, selection = visualEditor.ownerDocument.getSelection();
   if (!selection.rangeCount || !editor.contains(selection.anchorNode)) return;
   const range = selection.getRangeAt(0), nodes = [];
   if (range.collapsed) nodes.push(selection.anchorNode.nodeType === 1 ? selection.anchorNode : selection.anchorNode.parentElement);
   else {
-    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-    let node; while ((node = walker.nextNode())) if (node.textContent.trim() && range.intersectsNode(node)) nodes.push(node.parentElement);
+    const walker = visualEditor.ownerDocument.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let node; while ((node = walker.nextNode())) {
+      if (!node.textContent.trim() || !range.intersectsNode(node)) continue;
+      const start = range.startContainer === node ? range.startOffset : 0;
+      const end = range.endContainer === node ? range.endOffset : node.length;
+      if (end > start) nodes.push(node.parentElement);
+    }
   }
   if (!nodes.length) return;
-  const styles = nodes.map(node => getComputedStyle(node));
+  const styles = nodes.map(node => node.ownerDocument.defaultView.getComputedStyle(node));
   const fields = [['editorFont', style=>style.fontFamily.split(',')[0].replace(/["']/g,'').trim()], ['editorFontSize', style=>String(Math.round(parseFloat(style.fontSize)))], ['editorFontWeight', style=>style.fontWeight === 'normal' ? '400' : style.fontWeight === 'bold' ? '700' : style.fontWeight]];
   for (const [id,read] of fields) {
     const control = document.getElementById(id), values = [...new Set(styles.map(read))];
@@ -2033,27 +2088,27 @@ function syncTypographyToolbar() {
     control.title = values.length > 1 ? 'Mixed formatting' : values[0];
     if (control.tagName === 'INPUT') control.placeholder = values.length > 1 ? 'Mixed' : '';
   }
-  document.querySelectorAll('[data-format="bold"],[data-format="italic"]').forEach(button=>button.setAttribute('aria-pressed',String(document.queryCommandState(button.dataset.format))));
+  document.querySelectorAll('[data-format="bold"],[data-format="italic"]').forEach(button=>button.setAttribute('aria-pressed',String(visualEditor.ownerDocument.queryCommandState(button.dataset.format))));
 }
 
 function rememberEditorSelection() {
-  const selection = window.getSelection();
-  if (selection.rangeCount && document.querySelector('#visualEditor').contains(selection.anchorNode)) savedEditorRange = selection.getRangeAt(0).cloneRange();
+  const selection = visualEditor.ownerDocument.getSelection();
+  if (selection.rangeCount && visualEditor.contains(selection.anchorNode)) savedEditorRange = selection.getRangeAt(0).cloneRange();
   syncTypographyToolbar();
 }
 
 function restoreEditorSelection() {
-  const editor = document.querySelector('#visualEditor');
+  const editor = visualEditor;
   editor.focus();
-  const selection = window.getSelection();
+  const selection = visualEditor.ownerDocument.getSelection();
   selection.removeAllRanges();
   if (savedEditorRange && editor.contains(savedEditorRange.commonAncestorContainer)) selection.addRange(savedEditorRange);
-  else { const range = document.createRange(); range.selectNodeContents(editor); range.collapse(false); selection.addRange(range); }
+  else { const range = visualEditor.ownerDocument.createRange(); range.selectNodeContents(editor); range.collapse(false); selection.addRange(range); }
 }
 
 function insertEditorHtml(html) {
   restoreEditorSelection();
-  document.execCommand('insertHTML', false, html);
+  visualEditor.ownerDocument.execCommand('insertHTML', false, html);
   rememberEditorSelection();
   commitVisualEditor();
 }
@@ -2132,7 +2187,7 @@ function initStudio() {
   document.addEventListener('mailbot:page-changed', () => requestAnimationFrame(fitVisiblePreviews));
 
   window.addEventListener('resize', fitVisiblePreviews);
-  const editor = document.querySelector('#visualEditor');
+  const editor = visualEditor;
   document.addEventListener('selectionchange', rememberEditorSelection);
   recordEditorHistory();
   editor.addEventListener('beforeinput',event=>{
@@ -2146,7 +2201,7 @@ function initStudio() {
   editor.addEventListener('keydown',event=>{
     if ((event.metaKey || event.ctrlKey) && ['z','y'].includes(event.key.toLowerCase())) { event.preventDefault(); travelEditorHistory(event.shiftKey || event.key.toLowerCase() === 'y'); }
   });
-  editor.addEventListener('input',commitVisualEditor);
+  editor.addEventListener('input',()=>{if(!applyingEditorFormat)commitVisualEditor();});
   editor.addEventListener('paste',event=>{
     event.preventDefault();
     const text = event.clipboardData.getData('text/plain');
@@ -2159,21 +2214,26 @@ function initStudio() {
   });
   const applyTypography = (kind, value) => {
     restoreEditorSelection();
-    document.execCommand(kind === 'size' ? 'fontSize' : 'fontName', false, kind === 'font' ? value : kind === 'weight' ? 'mailbot-weight' : '7');
-    editor.querySelectorAll(kind === 'size' ? 'font[size="7"]' : kind === 'weight' ? 'font[face="mailbot-weight"]' : 'font[face]').forEach(font => {
-      const span = document.createElement('span');
-      while (font.firstChild) span.appendChild(font.firstChild);
-      if (kind === 'font') {
-        span.dataset.mailFontChoice = value;
-        span.style.fontFamily = `'${value}',Arial,Helvetica,sans-serif`;
-      } else {
-        span.dataset.mailTypography = 'true';
-        if (kind === 'weight') span.style.fontWeight = value;
-        else span.style.fontSize = `${value}px`;
-      }
-      font.replaceWith(span);
-    });
-    rememberEditorSelection();
+    const offsets = editorSnapshot().offsets;
+    applyingEditorFormat = true;
+    try {
+      visualEditor.ownerDocument.execCommand(kind === 'size' ? 'fontSize' : 'fontName', false, kind === 'font' ? value : kind === 'weight' ? 'mailbot-weight' : '7');
+      editor.querySelectorAll(kind === 'size' ? 'font[size="7"]' : kind === 'weight' ? 'font[face="mailbot-weight"]' : 'font[face]').forEach(font => {
+        const span = document.createElement('span');
+        while (font.firstChild) span.appendChild(font.firstChild);
+        if (kind === 'font') {
+          span.dataset.mailFontChoice = value;
+          span.style.fontFamily = `'${value}',Arial,Helvetica,sans-serif`;
+        } else {
+          span.dataset.mailTypography = 'true';
+          if (kind === 'weight') span.style.fontWeight = value;
+          else span.style.fontSize = `${value}px`;
+        }
+        font.replaceWith(span);
+      });
+      restoreEditorOffsets(offsets);
+      rememberEditorSelection();
+    } finally { applyingEditorFormat = false; }
     commitVisualEditor();
   };
   document.querySelector('#editorFont').addEventListener('change',event=>applyTypography('font',event.target.value));
@@ -2189,13 +2249,13 @@ function initStudio() {
   });
   document.querySelector('#insertDivider').addEventListener('click',()=>insertEditorHtml('<hr style="border:0;border-top:1px solid #dbe3ec;margin:24px 0;">'));
   document.querySelectorAll('[data-format]').forEach(button=>button.addEventListener('click',()=>{
-    restoreEditorSelection(); document.execCommand(button.dataset.format,false,button.dataset.value || null); commitVisualEditor();
+    restoreEditorSelection(); visualEditor.ownerDocument.execCommand(button.dataset.format,false,button.dataset.value || null); commitVisualEditor();
   }));
   document.querySelector('#insertButton').addEventListener('click',()=>openLinkDialog('button'));
   document.querySelector('#insertLink').addEventListener('click',()=>openLinkDialog('link'));
   editor.addEventListener('click',event=>{
     const button=event.target.closest('.mail-button');
-    if(button) openLinkDialog('button',button);
+    if(button) { event.preventDefault(); openLinkDialog('button',button); }
   });
   document.querySelector('#linkForm').addEventListener('submit',event=>{
     if (event.submitter?.value !== 'save') return;
@@ -2299,12 +2359,12 @@ function initStudio() {
 
 function setEditorMode(mode) {
   editorMode=mode;
-  document.querySelector('#visualEditor').hidden=mode!=='visual';
+  document.getElementById('composerCanvas').hidden=mode!=='visual';
   document.querySelector('#formatToolbar').hidden=mode!=='visual';
   elements.body.hidden=mode==='visual';
   document.querySelector('#visualMode').classList.toggle('selected',mode==='visual');
   document.querySelector('#sourceMode').classList.toggle('selected',mode==='source');
-  if(mode==='visual')syncVisualEditor();
+  if(mode==='visual'){syncVisualEditor();requestAnimationFrame(fitComposerFrame);}
 }
 
 function setPreviewImagesBlocked(blocked) {
