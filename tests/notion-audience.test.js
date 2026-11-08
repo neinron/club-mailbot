@@ -86,3 +86,20 @@ test('application invitations allow absent opt-in but always respect active opt-
   assert.equal(eligibility(contact('excluded',{'Subscription status':'Not subscribed',...props}),'recruiting',phase),false);
  }
 });
+
+test('explicit member copies only apply to the exact reminder contact and never bypass opt-out',()=>{
+ const c=contact('member',{'Current member':true});
+ const memberCopies=[{notionPageId:'member',email:'member@example.org'}];
+ assert.equal(filterAudience([c],{purpose:'reminder',phase,memberCopies}).contacts.length,1);
+ assert.equal(filterAudience([c],{purpose:'reminder',phase}).contacts.length,0);
+ assert.equal(filterAudience([contact('other',{'Current member':true})],{purpose:'reminder',phase,memberCopies}).contacts.length,0);
+ assert.equal(filterAudience([contact('member',{'Current member':true,'Subscription status':'Unsubscribed'})],{purpose:'reminder',phase,memberCopies}).contacts.length,0);
+ assert.equal(filterAudience([contact('member',{'Subscription status':'Not subscribed'})],{purpose:'newsletter',phase,memberCopies}).contacts.length,0);
+});
+
+
+test('suppressed delivery addresses remain visible but are excluded from all sending purposes',()=>{
+ const c=contact('bounced',{'Email delivery status':'Suppressed','Incomplete applications':[phase],'Application reminder eligible':true});
+ assert.equal(eligibility(c,'browse',phase),true);
+ for(const purpose of ['newsletter','recruiting','reminder','deadline'])assert.equal(eligibility(c,purpose,phase),false);
+});

@@ -1,5 +1,5 @@
 import { notionRequest, queryNotionSource, notionPropertyValue } from './notion-cli.js';
-import { deriveProperties, eligibility } from '../public/audience.js';
+import { deriveProperties, eligibility, memberCopyAllowed } from '../public/audience.js';
 
 export const defaultSourceId = 'ee78a5b5-8a15-48e5-b5fd-16f821e57d1c';
 export const defaultDatabaseId = '8312015036a44b90be22b9b05cd1b9df';
@@ -57,7 +57,7 @@ export async function validateNotionRecipients(recipients, audience) {
   }
   for (const row of notionRows) {
     const current = byId.get(row.notionPageId);
-    if (!current || emailCounts.get(row.email.toLowerCase()) !== 1 || String(current.properties.Email).toLowerCase() !== row.email.toLowerCase() || !eligibility(current, audience.purpose, config.currentPhase)) {
+    if (!current || emailCounts.get(row.email.toLowerCase()) !== 1 || String(current.properties.Email).toLowerCase() !== row.email.toLowerCase() || !(eligibility(current, audience.purpose, config.currentPhase) || memberCopyAllowed(current,audience))) {
       throw new Error('This saved list contains a contact who is no longer eligible. Refresh and filter the Notion audience before sending.');
     }
   }

@@ -4,13 +4,14 @@ Mailbot is a local tool for composing and preparing individually personalized cl
 
 ## Start
 
-Requires **Node.js 20 or newer** and Git. There are no third-party runtime packages.
+Requires **Node.js 20 or newer** and Git. The server uses Node’s built-in APIs; the interface uses React and shadcn/ui.
 
 ```bash
 git clone https://github.com/neinron/club-mailbot.git
 cd club-mailbot
 cp .env.example .env
 npm install
+npm run build:ui
 npm start
 ```
 
@@ -23,7 +24,7 @@ Each installation starts with an empty private workspace. Web-app drafts, recipi
 1. Ask the database owner to grant your Notion integration access to **Newsletter Subscribers**, then set `NOTION_API_KEY` in `.env`. Use the existing club data source, or set `NOTION_DATA_SOURCE_ID` and `NOTION_DATABASE_URL` for a compatible database. Change `NOTION_CURRENT_APPLICATION_PHASE` when recruitment moves to a new phase.
 2. Confirm the schema in [Notion setup](#notion-setup). Each team member needs authorized integration access; this repository does not include an API key or subscriber data.
 3. To use `{{unsubscribeUrl}}`, obtain the existing website signing secret through the club's approved credential-sharing process and configure `.env` as explained below. Do not generate a different secret for an already configured website. Cloning this repository does not deploy the website's signup or unsubscribe service.
-4. In **Settings**, enter the approved sender address and its Google App Password (or the advanced OAuth access token). Credentials remain in tab memory and must be re-entered after reloading.
+4. In **Settings**, enter the approved sender address and its Google App Password (or the advanced OAuth access token). Credentials remain in the running server’s memory for up to eight hours; restarting Mailbot clears them.
 5. Load or import recipients, save a named list, write and save a draft, then review it and send a test email to yourself. The real send button asks for confirmation.
 
 Keep Mailbot on your computer's loopback address. It is a local tool, not an authenticated public web service; do not expose its port to the internet.
@@ -62,7 +63,7 @@ npm run mailbot -- draft check --name "Recruiting launch"
 npm run mailbot -- draft preview --name "Recruiting launch" --output /tmp/recruiting-preview.html
 ```
 
-`--body-file` may contain HTML authored for the visual editor. `--html-file` is an optional full email wrapper and should contain `{{content}}`; `--design` is a JSON file with `layout`, `accent`, `background`, `font`, `padding`, and `width` fields. Drafts never include Gmail credentials. To load the result into the web app, open **Message → Manage drafts → Import CLI JSON** and choose `drafts/recruiting-launch.json`. To edit an existing browser draft from the CLI, export it as JSON, run `npm run mailbot -- draft import --input <file.json>`, then use `draft update`.
+`--body-file` may contain HTML authored for the visual editor. `--html-file` is an optional full email wrapper and should contain `{{content}}`; `--design` is a JSON file with `layout`, `accent`, `background`, `font`, `padding`, and `width` fields. Drafts never include Gmail credentials. To load the result into the web app, open **mail title dropdown → Import draft** and choose `drafts/recruiting-launch.json`. To edit an existing browser draft from the CLI, export it as JSON, run `npm run mailbot -- draft import --input <file.json>`, then use `draft update`.
 
 ### Notion source of truth and opt-outs
 
@@ -108,7 +109,7 @@ For newsletter delivery, `Subscription status` is authoritative: only `Subscribe
 
 ### 1. Choose recipients
 
-In **Recipients**, click **Choose recipients** or **Change audience**. The picker has **Notion** and **CSV / paste** sources. Notion opens as a database with **All contacts**, regardless of the current campaign. Its API key stays on the local server. The top **Saved list** dropdown contains only locally saved, named lists; Notion tags are filter values, not saved lists.
+In **Recipients**, open the list title dropdown. The picker has **Notion** and **CSV / paste** sources. Notion opens as a database with **All contacts**, regardless of the current campaign. Its API key stays on the local server. The top **Saved list** dropdown contains only locally saved, named lists; Notion tags are filter values, not saved lists.
 
 | Sending purpose | Required audience |
 | --- | --- |
@@ -150,7 +151,7 @@ Grant the integration access only to this database. Change `NOTION_CURRENT_APPLI
 
 
 
-In **Choose recipients → CSV / paste**, choose a file or paste comma-, semicolon- or tab-separated data, with or without a header. **Use imported recipients** attaches it; cancelling leaves the campaign unchanged. **List tools** exposes editable fields and delivery roles. Extra metadata is available from each contact’s **Details** button and as editor variables. Saved lists and drafts are stored on this computer in `data/workspace.json` (ignored by Git, file permissions 0600), with a browser cache. Existing browser data is imported automatically on first load. They survive server restarts and are shared between localhost and 127.0.0.1. App passwords and secrets are never saved. Back up the private data directory separately; it contains contact data. A failed disk save is shown in the save status.
+In **recipient list dropdown → Import CSV or paste**, choose a file or paste comma-, semicolon- or tab-separated data, with or without a header. **Use imported recipients** attaches it; cancelling leaves the campaign unchanged. Use the pencil to rename a column, × to remove it, and + on the right to add a column. The small info icon opens contact details; columns are also available as editor variables. Saved lists and drafts are stored on this computer in `data/workspace.json` (ignored by Git, file permissions 0600), with a browser cache. Existing browser data is imported automatically on first load. They survive server restarts and are shared between localhost and 127.0.0.1. App passwords and secrets are never saved. Back up the private data directory separately; it contains contact data. A failed disk save is shown in the save status.
 
 For larger or repeat lists, prepare the file in the CLI instead of pasting contacts one by one:
 
@@ -167,13 +168,17 @@ Use only contacts who are eligible to receive that message, such as applicants w
 
 ### 2. Write the message
 
-In **Message**, create or rename a draft, add a subject, and write the email with the visual editor. Use **Personalize** to insert recipient fields such as `{{firstName}}`; use **HTML** for custom markup. Buttons and horizontal dividers can be inserted from the toolbar. Select text to choose Albert Sans or League Spartan, a size from 1–200 px and a weight from 100–900. The toolbar reflects the current selection; Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z undo and redo editor changes. Web fonts are requested remotely from Google and are not attachments; unsupported or privacy-restricted mail clients may use fallback fonts. The live preview updates as you edit.
+In **Message**, create or rename a draft, add a subject, and write the email with the visual editor. Use **Personalize** to insert recipient fields such as `{{firstName}}`; use **HTML** for custom markup. Buttons and horizontal dividers can be inserted from the toolbar. Select text to choose Albert Sans or League Spartan, a size from 1–200 px and a weight from 100–900. The toolbar reflects the current selection; Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z undo and redo editor changes. Web fonts are requested remotely from Google and are not attachments; unsupported or privacy-restricted mail clients may use fallback fonts. Use **Review** to inspect the rendered message.
 
-Open **Email design** within Message to change layout, colors, fonts, spacing, width or the custom HTML template. **Apply to draft** replaces the current layout. Templates must include `{{content}}`.
+Saved HTML layouts are preserved. The composer focuses on subject and content; layout-building controls are no longer exposed. Templates used by the CLI must include `{{content}}`.
 
-### 3. Review & send
+### 3. Review
 
-**Review & send** combines recipient personalization, desktop/mobile preview, blocked-image preview, the readiness checklist, test address and sending controls. Enter sender credentials in **Settings**. The test uses one selected recipient’s personalization and goes only to the explicit test address, with Cc/Bcc removed. Bulk sending still requires confirmation. Loading, filtering and saving audiences never sends mail.
+**Review** shows the email in a mail-window frame with sender, recipient name and email, and subject. Switch between desktop/mobile, light/dark and blocked-image previews.
+
+### 4. Send
+
+**Send** keeps a smaller preview on the left and the test and campaign controls on the right. Delivery progress and the scrollable log remain visible below the controls. Enter sender credentials in **Settings**. The test uses one selected recipient’s personalization and goes only to the explicit test address, with Cc/Bcc removed. Bulk sending still requires confirmation. Loading, filtering and saving audiences never sends mail.
 
 ### Live progress and resuming
 
@@ -185,9 +190,9 @@ Do not interpret a stale counter as permission to restart the server or send aga
 
 ## Connect the Gmail account
 
-1. Open **Settings** in the sidebar and enter the sender's Gmail or Google Workspace address.
+1. Open **Settings** in the header and enter the sender's Gmail or Google Workspace address.
 2. Mailbot's default sign-in method is a Google **App Password**. Google requires 2-Step Verification to create one. Generate it in the Google Account's App Passwords settings, then paste it into the app-password field. Do not use the normal Google account password. Google's current instructions and restrictions are [here](https://support.google.com/accounts/answer/185833).
-3. Test the connection. The app password stays in the current browser tab's memory and is not written to local storage or sent to GitHub. It is used by the local Mailbot server to authenticate to Gmail SMTP. Re-enter it after closing or refreshing the tab.
+3. Test the connection. After a successful connection test or SMTP send, the verified app password stays in the local Mailbot server's process memory for up to 8 hours (OAuth access tokens: 50 minutes). Refreshing or closing a browser tab does not require re-entry while that server session remains valid. Restarting Mailbot clears it. **Forget password** clears the remembered credential immediately; an already running send retains its in-flight credential until it stops. The credential is never returned to the browser or stored in drafts, browser storage, files, or GitHub.
 
 ![Gmail sender settings with blank credential fields](docs/screenshots/05-account.png)
 
@@ -202,7 +207,7 @@ Mailbot uses Gmail SMTP through an existing club account, so the club does not n
 ## Data and security
 
 - Web-app drafts and recipient lists are saved in ignored `data/workspace.json`, with a browser cache. CLI drafts and exports use ignored `drafts/` and `campaigns/` folders. Back up private data securely, never through Git.
-- The app password and OAuth token are not persisted. SMTP command logging masks authentication secrets.
+- The app password and OAuth token are never persisted to disk. Verified credentials may be reused from the local server’s temporary process memory. SMTP command logging masks authentication secrets.
 - Do not put real drafts, recipient exports, audit files, or credentials in GitHub. The `data/`, `campaigns/`, `drafts/`, `.env` and local progress files are ignored by Git.
 - The test-send route requires an explicit valid test address and sends only to it, without Cc or Bcc.
 - Google limits sending and can block suspicious or excessive activity. Check the current [Gmail sending limits](https://support.google.com/mail/answer/22839?hl=en) and the relevant Workspace policy before a large send.
@@ -229,3 +234,9 @@ button{{Choose a slot,interviewLink}}
 ```
 
 The visual editor shows button macros as editable buttons. Pasted rich text is inserted as plain text; use HTML mode for custom markup. Previews are sandboxed with scripts disabled.
+
+## Interface development
+
+The campaign workflow is **Recipients → Message → Review → Send**. Choose or rename a draft from the title dropdown, or start with **New mail**. The recipient list title is also its dropdown, with **New list** and **Save list** beside it. Rename columns with the pencil, remove them with ×, and add a column on the right. The first table row adds a person. Review shows the full email; Send uses a smaller preview beside the delivery controls. Completed delivery receipts stay with their campaign.
+
+The interface components live in `ui/`, with official shadcn/ui sources in `ui/components/ui/`. The existing editor and audience modules remain in `public/`. After changing components or styles, run `npm run build:ui` and reload the browser. This generates `public/studio.js` and `public/studio.css`, which the Node server serves directly.

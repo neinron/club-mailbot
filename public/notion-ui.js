@@ -34,7 +34,7 @@ export function initNotionBrowser({useSnapshot,saveSnapshot,setStatus,getCurrent
   function snapshot(purpose='browse'){
     const r=result();
     if(manualList)return {tableName:viewName||'New list',recipientColumns:clone(manualList.recipientColumns),recipients:r.contacts.map(c=>clone(manualList.recipients[Number(c.id)])),audienceSource:null};
-    const contacts=purpose==='browse'?r.contacts:filterAudience(r.contacts,{purpose,phase:data.currentPhase}).contacts;
+    const contacts=purpose==='browse'?r.contacts:filterAudience(r.contacts,{purpose,phase:data.currentPhase,memberCopies:settings.memberCopies||[]}).contacts;
     return {...recipientSnapshot(contacts,fields),tableName:viewName||'Filtered contacts',audienceSource:{sourceId:data.sourceId,databaseUrl:data.databaseUrl,loadedAt:data.loadedAt,phase:data.currentPhase,...clone(settings),purpose,fields:[...fields]}};
   }
   function filterMarkup(node, path = []) {
@@ -117,20 +117,20 @@ export function initNotionBrowser({useSnapshot,saveSnapshot,setStatus,getCurrent
   function open(_source='notion',fromReview=null){
     csvStaged=false;mode='campaign';resetView();
     if(fromReview)settings=viewSettings(fromReview);
-    document.querySelector('#pickerNotion').append(root);showSource('notion');
+    document.querySelector('#pickerNotion').append(root);showSource(_source);
     if(!dialog.open)dialog.showModal();
   }
   function checkUse(){
-    const purpose=document.querySelector('#useAudiencePurpose').value,selected=result().contacts,eligible=filterAudience(selected,{purpose,phase:data.currentPhase}).contacts;
+    const purpose=document.querySelector('#useAudiencePurpose').value,selected=result().contacts,eligible=filterAudience(selected,{purpose,phase:data.currentPhase,memberCopies:settings.memberCopies||[]}).contacts;
     document.querySelector('#useAudienceExplanation').textContent=({deadline:`Non-members without a submitted ${data.currentPhase} application, including unfinished applications. Active opt-outs are excluded.`,recruiting:`Non-members who have not started or submitted a ${data.currentPhase} application. Active opt-outs are excluded; a missing newsletter opt-in does not exclude an invitation.`,reminder:`Only unfinished ${data.currentPhase} applications. Members and completed applications are excluded.`,newsletter:'Only contacts with an active newsletter subscription.'})[purpose];
     document.querySelector('#useAudienceCount').textContent=`${eligible.length} of ${selected.length} contacts can receive this email.`;
     const confirm=document.querySelector('#confirmUseAudience');confirm.disabled=!eligible.length;confirm.textContent=`Use ${eligible.length} recipients`;
   }
-  document.querySelector('#changeRecipients').addEventListener('click',()=>open());
-  document.querySelector('#manageSavedLists').addEventListener('click',()=>open());
+  document.addEventListener('mailbot:open-audience',event=>open(event.detail?.source || 'notion'));
+  document.querySelector('#manageSavedLists').addEventListener('click',()=>open('saved'));
   document.querySelector('#closeAudience').addEventListener('click',()=>dialog.close());
   // Saved lists are selected in the database toolbar, never confused with Notion tags.
-  document.querySelector('#sourceSaved').hidden=true;
+  document.querySelector('#sourceSaved').hidden=false;
   for(const button of document.querySelectorAll('[data-source]')){
     button.addEventListener('click',()=>showSource(button.dataset.source));
     button.addEventListener('keydown',event=>{const buttons=[...document.querySelectorAll('[data-source]')].filter(b=>!b.hidden),i=buttons.indexOf(button);let next;if(event.key==='ArrowRight')next=(i+1)%buttons.length;if(event.key==='ArrowLeft')next=(i+buttons.length-1)%buttons.length;if(event.key==='Home')next=0;if(event.key==='End')next=buttons.length-1;if(next!=null){event.preventDefault();showSource(buttons[next].dataset.source);buttons[next].focus();}});

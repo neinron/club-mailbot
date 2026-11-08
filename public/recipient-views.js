@@ -7,7 +7,7 @@ export function viewSettings(source = {}) {
   if(source.event)rules.push({property:'Luma events',operator:'contains',value:source.event});
   if(source.membership)rules.push({property:'Current member',operator:'equals',value:source.membership});
   if(source.applicationStatus)rules.push({property:source.applicationStatus==='completed'?'Completed applications':'Incomplete applications',operator:source.applicationPhase?'contains':'not_empty',value:source.applicationPhase});
-  return {filter:rules.length===1?filter:{match:'all',rules},search:source.search||'',sortProperty:source.sortProperty||'Name',sortDirection:source.sortDirection||'asc',limit:Number(source.limit)||0};
+  return {...(source.memberCopies?.length ? {memberCopies:structuredClone(source.memberCopies)} : {}),filter:rules.length===1?filter:{match:'all',rules},search:source.search||'',sortProperty:source.sortProperty||'Name',sortDirection:source.sortDirection||'asc',limit:Number(source.limit)||0};
 }
 export function activeViewFilter(node) {
   if(node.rules){const rules=node.rules.map(activeViewFilter).filter(Boolean);return rules.length?{...node,rules}:null;}

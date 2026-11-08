@@ -1,4 +1,10 @@
 let serverSendActive = false;
+let lastDelivery = null;
+let activeSendIdentity = '';
+let latestSendProgress = null;
+let rememberedCredentialKey = "";
+function credentialKey() { return `${elements.accountEmail.value.trim().toLowerCase()}|${elements.authMode.value}`; }
+function hasCredentials() { return Boolean(elements.appPassword.value.trim() || rememberedCredentialKey === credentialKey()); }
 const editorUndo = [];
 const editorRedo = [];
 let restoringEditorHistory = false;
@@ -7,6 +13,7 @@ let studioReady = false;
 let editorMode = "visual";
 let previewIndex = 0;
 let previewImagesBlocked = false;
+let previewTheme = "light";
 let savedEditorRange = null;
 let editingButton = null;
 let linkKind = "button";
@@ -101,7 +108,8 @@ function activatePage(pageName) {
     document.querySelector('#designDetails').open = true;
     if (studioReady) updateDesignPreview();
   }
-  if (pageName === 'send' || pageName === 'preview') pageName = 'review';
+  if (pageName === 'preview') pageName = 'review';
+  document.body.dataset.page = pageName;
   document.querySelectorAll(".page-nav .page-link").forEach(link => link.setAttribute("aria-current", link.dataset.pageTarget === pageName ? "page" : "false"));
   elements.pages.forEach((page) => {
     page.classList.toggle("active", page.dataset.page === pageName);
@@ -111,11 +119,12 @@ function activatePage(pageName) {
     link.classList.toggle("active", link.dataset.pageTarget === pageName);
   });
 
-  const titles = {recipients:'Recipients', message:'Message', review:'Review & send', contacts:'Contacts & lists', account:'Settings'};
+  const titles = {recipients:'Recipients', message:'Message', review:'Review', send:'Send', contacts:'Contacts & lists', account:'Settings'};
   const activeLink = elements.pageLinks.find((link) => link.dataset.pageTarget === pageName);
   if (elements.workspaceTitle && activeLink) {
     elements.workspaceTitle.textContent = titles[pageName] || activeLink.querySelector("span")?.textContent || "Mailbot";
   }
+  if (uiInitialized && !sending) setStatus('');
   if (uiInitialized) { history.replaceState(null, '', '#'+pageName); window.scrollTo(0,0); }
   document.dispatchEvent(new CustomEvent('mailbot:page-changed', {detail:{page:pageName}}));
 }
@@ -426,6 +435,79 @@ function normalizeAnchorTargets(html, recipient) {
   });
 }
 
+function previewHtmlWithTheme(html) {
+  if (!html || previewTheme !== 'dark') return html;
+  const doc = new DOMParser().parseFromString(html,'text/html');
+  doc.documentElement.dataset.mailbotPreviewTheme = 'dark';
+  const style = doc.createElement('style');
+  style.textContent = `html,body{background:#15181d!important;color:#e5ecf5!important;color-scheme:dark}
+    td,table,div,section{border-color:#3d4653!important;box-shadow:none!important}
+    td[style*="background:#fff"],td[style*="background: #fff"],td[style*="background-color:#ffffff"],td[bgcolor="#ffffff"],table[style*="background:white"],table[style*="background:#fff"]{background:#202731!important}
+    h1,h2,h3,p,li,span,strong,b{color:#e5ecf5!important}
+    a:not([data-club-mailbot-variant]){color:#98caff!important}
+    [data-mailbot-navbar="true"]{background:#fff!important;background-image:linear-gradient(#fff,#fff)!important;color-scheme:only light!important;border-color:#e1e6ed!important}
+    [data-mailbot-navbar="true"] img{background:#fff!important}
+    [data-club-mailbot-variant="gradient"]{color:#0a2d57!important}
+    [data-club-mailbot-variant="primary"]{color:#fff!important}
+    table[data-mailbot-keep-white],td[data-mailbot-keep-white],a[data-mailbot-keep-white]{background-color:#f7f8fa!important;background-image:linear-gradient(#f7f8fa,#f7f8fa)!important;color-scheme:only light!important}
+    a[data-mailbot-keep-white]{color:#0a2d57!important;-webkit-text-fill-color:#0a2d57!important}`;
+  doc.head.append(style);
+  return '<!doctype html>'+doc.documentElement.outerHTML;
+}
+
+function localMailImageAssets() { return {
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/team-banner-title-size.png': '/assets/mail-team-banner-title-size.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/harvard-horizontal.png': '/assets/mail-harvard-horizontal.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/team-banner-dark-gradient.png': '/assets/mail-team-banner-dark-gradient.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/team-banner-no-gradient.png': '/assets/mail-team-banner-no-gradient.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/team-banner-white.png': '/assets/mail-team-banner-white.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/openai.png': '/assets/mail-openai.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/un-women.png': '/assets/mail-un-women.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/harvard.png': '/assets/mail-harvard.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/aws.png': '/assets/mail-aws.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/oliver-wyman.png': '/assets/mail-oliver-wyman.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/club-logo-white.png?v=c79e437': '/assets/mail-club-logo-white.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/engineering.png': '/assets/mail-engineering.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/social-partnerships.png': '/assets/mail-social-partnerships.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/strategic-partnerships.png': '/assets/mail-strategic-partnerships.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/community.png': '/assets/mail-community.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/marketing.png': '/assets/mail-marketing.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/strategy-finance-legal.png': '/assets/mail-strategy-finance-legal.png',
+  'https://tum-socialaiclub.de/assets/mail/recruiting-2026/team-banner.png': '/assets/mail-team-banner.png',
+
+  'https://tum-socialaiclub.de/assets/logos/LOGO_V6-ICON%2BTUM_SOCIAL_CLUB-single_line-white_text.svg': '/assets/club-logo-white.svg',
+  'https://tum-socialaiclub.de/assets/logos/department-pills/engineering.png': '/assets/original-pill-engineering.png',
+  'https://tum-socialaiclub.de/assets/logos/department-pills/social-partnerships.png': '/assets/original-pill-social-partnerships.png',
+  'https://tum-socialaiclub.de/assets/logos/department-pills/strategic-partnerships.png': '/assets/original-pill-strategic-partnerships.png',
+  'https://tum-socialaiclub.de/assets/logos/department-pills/community.png': '/assets/original-pill-community.png',
+  'https://tum-socialaiclub.de/assets/logos/department-pills/marketing.png': '/assets/original-pill-marketing.png',
+  'https://tum-socialaiclub.de/assets/logos/department-pills/strategy-finance-legal.png': '/assets/original-pill-strategy-finance-legal.png',
+
+  'https://tum-socialaiclub.de/assets/logos/V6_ICON%2BDEPARTMENT-ENGINEERING.png': '/assets/department-0.png',
+  'https://tum-socialaiclub.de/assets/logos/V6_ICON%2BDEPARTMENT-SOCIAL-PARTNERSHIPS.png': '/assets/department-1.png',
+  'https://tum-socialaiclub.de/assets/logos/V6_ICON%2BDEPARTMENT-STRATEGIC-PARTNERSHIPS.png': '/assets/department-2.png',
+  'https://tum-socialaiclub.de/assets/logos/V6_ICON%2BDEPARTMENT-COMMUNITY.png': '/assets/department-3.png',
+  'https://tum-socialaiclub.de/assets/logos/V6-ICON%2BDEPARTMENT-MARKETING.png': '/assets/department-4.png',
+  'https://tum-socialaiclub.de/assets/logos/V6_ICON%2BDEPARTMENT-FINANCE-LEGAL.png': '/assets/department-5.png',
+
+  'https://tum-socialaiclub.de/cms/strategic-partner-logos/supporter/harvard-crest.png': '/assets/partner-harvard-crest.png',
+  'https://tum-socialaiclub.de/cms/strategic-partner-logos/silver/oliver-wyman-logo.png': '/assets/partner-oliver-wyman.png',
+  'https://tum-socialaiclub.de/cms/strategic-partner-logos/supporter/openai-logo.svg': '/assets/partner-openai-original.svg',
+  'https://tum-socialaiclub.de/cms/all-partner-logos/Un-women-for-all-women-and-girls-coloured.png': '/assets/partner-un-women-original.png',
+  'https://tum-socialaiclub.de/cms/strategic-partner-logos/supporter/harvard.svg': '/assets/partner-harvard.svg',
+  'https://tum-socialaiclub.de/assets/club/community-applause-700.jpg': '/assets/community-applause-700.jpg',
+  'https://tum-socialaiclub.de/cms/team/team-kickoff.jpg': '/assets/team-kickoff.jpg',
+  'https://tum-socialaiclub.de/cms/all-partner-logos/openai-blue.svg': '/assets/partner-openai.svg',
+  'https://tum-socialaiclub.de/cms/all-partner-logos/un-women-blue.svg': '/assets/partner-un-women.svg',
+  'https://tum-socialaiclub.de/cms/all-partner-logos/aws-coloured.svg': '/assets/partner-aws.svg',
+  'https://www.harvard.edu/wp-content/uploads/2020/10/cropped-logo-branding-compressed.png': '/assets/harvard-official.png',
+}; }
+function previewHtmlWithLocalCommunityPhoto(html) {
+  let result = String(html || '');
+  for (const [remote, local] of Object.entries(localMailImageAssets())) result = result.replaceAll(remote, `${location.origin}${local}`);
+  return result;
+}
+
 function previewHtmlWithLocalSocialIcons(html) {
   const icons = { "LinkedIn-app-icon.png": "linkedin.png", "instagram-app-icon.png": "instagram.png", "luma-app-icon.png": "luma.png" };
   return String(html || "").replace(/https:\/\/tum-socialaiclub\.de\/assets\/socials-logos\/(LinkedIn-app-icon\.png|instagram-app-icon\.png|luma-app-icon\.png)/g, (_url, name) => `/social-icons/${icons[name]}`);
@@ -596,6 +678,19 @@ function renderHtmlContent(template, recipient) {
   return working.replace(/%%MAILBOTE_TOKEN_(\d+)%%/g, (_, rawIndex) => tokens[Number(rawIndex)] || "");
 }
 
+function protectLogoHeader(html) {
+  const logo = /<img\b[^>]*LOGO_V6-ICON(?:%2B|\+)TUM_SOCIAL_CLUB-single_line-dark_text\.svg[^>]*>/i.exec(html);
+  if (!logo) return html;
+  const cells = [...html.slice(0, logo.index).matchAll(/<td\b[^>]*>/gi)];
+  const cell = cells.at(-1);
+  if (!cell) return html;
+  let tag = cell[0].replace(/\sbgcolor=(["']).*?\1/i, '').replace(/\sdata-mailbot-navbar=(["']).*?\1/i, '');
+  const white = 'background-color:#ffffff!important;background-image:linear-gradient(#ffffff,#ffffff);color-scheme:only light;';
+  tag = /style=(["'])(.*?)\1/i.test(tag) ? tag.replace(/style=(["'])(.*?)\1/i, (_m,q,style)=>`style=${q}${style};${white}${q}`) : tag.replace(/>$/, ` style="${white}">`);
+  tag = tag.replace(/>$/, ' bgcolor="#ffffff" data-mailbot-navbar="true">');
+  return html.slice(0,cell.index)+tag+html.slice(cell.index+cell[0].length);
+}
+
 function constrainLogoDimensions(html) {
   return String(html || "").replace(/<img\b[^>]*>/gi, tag => {
     if (!/LOGO_V6-ICON(?:%2B|\+)TUM_SOCIAL_CLUB-single_line-dark_text\.svg/i.test(tag)) return tag;
@@ -620,7 +715,7 @@ function renderHtmlMessage(designTemplate, contentTemplate, recipient) {
   const font = String(designTemplate).match(/data-mail-font="(serif|sans)"/)?.[1];
   if (accent) result = result.replaceAll("#0a2d57", accent);
   if (font === "serif") result = result.replaceAll("'Albert Sans',Arial,Helvetica,sans-serif", "Georgia,serif").replaceAll("'League Spartan',Arial,Helvetica,sans-serif", "Georgia,serif");
-  return includeEmailFonts(constrainLogoDimensions(result));
+  return includeEmailFonts(protectLogoHeader(constrainLogoDimensions(result)));
 }
 
 function insertVariableAtCursor(variableName) {
@@ -707,11 +802,16 @@ function setStatus(message, type = "") {
 
 function setSaveStatus(message) {
   elements.saveStatus.textContent = message;
+  const failed=/failed|could not|browser only/i.test(message);
+  const state=document.getElementById('workspaceSaveState');
+  if(state)state.textContent=failed?'Save failed':/unsaved|saving/i.test(message)?'Saving…':'Saved locally';
+  if(failed)setStatus(message,'error');
 }
 
 function setTableSaveStatus(message) {
   if (elements.tableSaveStatus) {
     elements.tableSaveStatus.textContent = message;
+    if(/failed|could not|browser only/i.test(message))setStatus(message,'error');
   }
 }
 
@@ -731,6 +831,7 @@ function showLogs(trace = [], heading = "") {
 }
 
 function updateAuthUi() {
+  refreshCredentialSession();
   const isOauth = elements.authMode.value === "xoauth2";
   elements.secretLabel.textContent = isOauth ? "OAuth Access Token" : "App password";
   elements.appPassword.placeholder = isOauth ? "ya29... Access Token" : "16-character app password";
@@ -762,6 +863,7 @@ function collectDraft() {
     htmlBody: elements.htmlBody.value,
     delayMs: elements.delayMs.value,
     designSettings: studioReady ? readDesignSettings() : undefined,
+    lastDelivery,
     savedAt: new Date().toISOString()
   };
 }
@@ -1034,6 +1136,7 @@ function deleteTableState() {
 function applyDraft(draft, showStatus = true) {
   try {
     isHydratingDraft = true;
+    lastDelivery = draft.lastDelivery || null;
     elements.draftName.value = normalizeDraftName(draft.draftName);
     if (elements.tableName && (draft.tableName || draft.audienceSource)) elements.tableName.value = draft.tableName || getSelectedTableName() || "Notion audience";
     elements.accountEmail.value = draft.accountEmail || "";
@@ -1047,7 +1150,7 @@ function applyDraft(draft, showStatus = true) {
     restoreDesignSettings(draft.designSettings);
     previewIndex = 0;
 
-    if (Array.isArray(draft.recipients) && draft.recipients.length) {
+    if (Array.isArray(draft.recipients)) {
       hydrateRecipientData(draft.recipientColumns, draft.recipients, draft.audienceSource);
     } else {
       recipients = parseRecipients(draft.rawRecipients || "");
@@ -1060,7 +1163,7 @@ function applyDraft(draft, showStatus = true) {
     updateDraftSelectOptions(normalizeDraftName(draft.draftName));
     setSelectedDraftName(draft.draftName);
     if (showStatus) {
-      setSaveStatus(`Loaded: ${formatSavedAt(draft.savedAt)}. Re-enter the app password.`);
+      setSaveStatus(`Loaded: ${formatSavedAt(draft.savedAt)}.`);
     }
     return true;
   } catch {
@@ -1119,11 +1222,12 @@ function removeRecipient(index) {
   queueAutosave();
 }
 
-function addRecipient() {
+function addRecipient(atStart = false) {
   recipientEditing = true;
   document.querySelector("#editTableMode").checked = true;
   const emptyRecipient = Object.fromEntries(recipientColumns.map((column) => [column.key, ""]));
-  recipients.push(ensureRequiredRecipientFields(emptyRecipient));
+  if (atStart === true) recipients.unshift(ensureRequiredRecipientFields(emptyRecipient));
+  else recipients.push(ensureRequiredRecipientFields(emptyRecipient));
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
@@ -1131,7 +1235,7 @@ function addRecipient() {
 }
 
 function addColumn() {
-  const rawLabel = window.prompt("New column name", "interviewLink");
+  const rawLabel = arguments[0] || window.prompt("New column name", "Column");
   if (!rawLabel) return;
   const label = rawLabel.trim();
   if (!label) return;
@@ -1176,23 +1280,9 @@ function renameColumn(index, nextLabel) {
   const trimmed = String(nextLabel || "").trim();
   if (!trimmed) return;
   const current = recipientColumns[index];
-  const next = canonicalColumnFromHeader(trimmed);
-  next.role = recipientColumns[index].role || next.role;
-
-  if (recipientColumns.some((column, columnIndex) => columnIndex !== index && column.key === next.key)) {
-    setStatus(`Column "${next.label}" already exists.`, "error");
-    return;
-  }
-
-  recipientColumns[index] = next;
-  recipients = recipients.map((recipient) => {
-    const updated = { ...recipient };
-    updated[next.key] = updated[current.key] || "";
-    if (next.key !== current.key) {
-      delete updated[current.key];
-    }
-    return ensureRequiredRecipientFields(updated);
-  });
+  if (!current) return;
+  if (recipientColumns.some((column,i) => i !== index && column.label.toLowerCase() === trimmed.toLowerCase())) { setStatus('A column with this name already exists.', 'error'); return; }
+  recipientColumns[index] = {...current, label:trimmed};
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
@@ -1272,17 +1362,19 @@ function updateTable() {
   if (audienceContext) audienceContext.textContent = audienceSource
     ? `Notion snapshot · ${purposeNames[audienceSource.purpose] || 'Saved audience'} · updated ${formatSavedAt(audienceSource.loadedAt)}${audienceSource.purpose === 'browse' ? ' · Review only' : ''}`
     : recipients.length ? 'Local list · Saved with this campaign' : 'Notion, a saved list, or a CSV import.';
-  const audienceName = document.querySelector('#activeAudienceName');
-  if (audienceName) audienceName.textContent = recipients.length || audienceSource ? normalizeTableName(elements.tableName?.value) : 'No recipients selected';
-  const changeButton = document.querySelector('#changeRecipients');
-  if (changeButton) { changeButton.textContent = recipients.length ? 'Change audience' : 'Choose recipients'; changeButton.classList.toggle('primary', !recipients.length); }
   const refresh = document.querySelector('#refreshAudience'); if (refresh) refresh.hidden = !audienceSource?.sourceId;
   const save = document.querySelector('#openSaveList'); if (save) save.disabled = !recipients.length;
   if (elements.addRecipientButton) { elements.addRecipientButton.disabled = Boolean(audienceSource?.sourceId); elements.addRecipientButton.title = audienceSource?.sourceId ? 'Add new contacts in Notion, then refresh this audience.' : ''; }
-  elements.recipientCount.textContent = `${recipients.length} recipients`;
-  elements.duplicateCount.textContent = `${parseStats.duplicates} duplicates`;
-  elements.invalidCount.textContent = `${parseStats.invalid} invalid`;
+  elements.recipientCount.textContent = `${recipients.length} ${recipients.length === 1 ? "recipient" : "recipients"}`;
+  elements.duplicateCount.textContent = parseStats.duplicates ? `${parseStats.duplicates} duplicates removed` : '';
+  elements.invalidCount.textContent = parseStats.invalid ? `${parseStats.invalid} invalid addresses excluded` : '';
   if (elements.summaryRecipientCount) elements.summaryRecipientCount.textContent = String(recipients.length);
+  if (document.documentElement.dataset.studioReady === 'true') {
+    document.dispatchEvent(new CustomEvent('mailbot:recipient-table', {detail:{columns:recipientColumns,rows:recipients,canAdd:!audienceSource?.sourceId}}));
+    document.dispatchEvent(new CustomEvent('mailbot:campaign-state', {detail:{draftName:elements.draftName.value,canRefresh:!!audienceSource?.sourceId,tableName:recipients.length || elements.tableName.value !== 'Default list' ? elements.tableName.value : 'Choose a list'}}));
+    updateEditorVariables();
+    return;
+  }
   if (!recipientEditing) {
     elements.recipientHead.innerHTML = '<tr><th>Name</th><th>Email</th><th>Lists</th><th><span class="sr-only">Contact details</span></th></tr>';
     elements.recipientRows.innerHTML = recipients.length ? recipients.map((row,index)=>`<tr><td>${escapeHtml(row.name || '—')}</td><td>${escapeHtml(row.email)}</td><td><div class="contact-list-tags">${(recipientField(row,'Lists') || [recipientApplication(row),recipientField(row,'Origins')].filter(x=>x&&x!=='—').join('; ') || 'Local list').split('; ').map(tag=>`<span>${escapeHtml(tag)}</span>`).join('')}</div></td><td><button type="button" class="ghost" data-contact-details="${index}" aria-label="Details for ${escapeHtml(row.name || row.email)}">Details</button></td></tr>`).join('') : '<tr><td colspan="4" class="empty-table">Choose recipients to build this campaign’s audience.</td></tr>';
@@ -1348,6 +1440,25 @@ function updateTable() {
   updateEditorVariables();
 }
 
+function fitPreviewFrame(frame) {
+  if (!frame?.offsetWidth || !frame.contentDocument?.body) return;
+  frame.style.height = '1px';
+  const doc = frame.contentDocument;
+  const height=Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight, 400);
+  frame.style.height = `${height}px`;
+  if (frame.id === 'messageHtmlPreview') {
+    const holder=frame.parentElement;
+    const scale=Math.min(1,holder.clientWidth / 680);
+    frame.style.transform=`scale(${scale})`;
+    holder.style.height=`${height * scale}px`;
+  }
+}
+
+function fitVisiblePreviews() {
+  fitPreviewFrame(elements.htmlPreview);
+  fitPreviewFrame(elements.messageHtmlPreview);
+}
+
 function updatePreview() {
   previewIndex = Math.min(previewIndex, Math.max(0, recipients.length - 1));
   const recipient = recipients[previewIndex];
@@ -1360,50 +1471,75 @@ function updatePreview() {
   }
   if (elements.messageHtmlPreview) {
     const messagePreview = elements.messageHtmlPreview;
-    messagePreview.onload = () => {
-      const previewDocument = messagePreview.contentDocument;
-      const contentHeight = Math.max(
-        previewDocument?.documentElement?.scrollHeight || 0,
-        previewDocument?.body?.scrollHeight || 0,
-      );
-      if (contentHeight) messagePreview.style.height = `${contentHeight}px`;
-    };
-    messagePreview.srcdoc = previewHtmlWithLocalSocialIcons(renderedHtml) || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>";
+    messagePreview.onload = () => { fitPreviewFrame(messagePreview); messagePreview.contentDocument?.fonts?.ready.then(() => fitPreviewFrame(messagePreview)); };
+    messagePreview.srcdoc = previewHtmlWithTheme(previewHtmlWithLocalCommunityPhoto(previewHtmlWithLocalSocialIcons(renderedHtml))) || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>";
   }
+  const previewFrom = document.getElementById('previewFrom');
+  if (previewFrom) previewFrom.textContent = `${elements.fromName.value || 'Sender'} <${elements.accountEmail.value || 'No sender connected'}>`;
   elements.previewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "No recipient";
   elements.previewSubject.textContent = renderTemplate(elements.subject.value, recipient);
   if (document.activeElement !== elements.previewBody) {
     elements.previewBody.value = elements.body.value;
   }
-  elements.htmlPreview.onload = () => {
-    const previewDocument = elements.htmlPreview.contentDocument;
-    const contentHeight = Math.max(
-      previewDocument?.documentElement?.scrollHeight || 0,
-      previewDocument?.body?.scrollHeight || 0,
-      800,
-    );
-    elements.htmlPreview.style.height = `${contentHeight}px`;
-  };
-  elements.htmlPreview.srcdoc = previewHtmlWithBlockedImages(previewHtmlWithLocalSocialIcons(renderedHtml) || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>");
+  elements.htmlPreview.onload = () => { fitPreviewFrame(elements.htmlPreview); elements.htmlPreview.contentDocument?.fonts?.ready.then(() => fitPreviewFrame(elements.htmlPreview)); };
+  elements.htmlPreview.srcdoc = previewHtmlWithBlockedImages(previewHtmlWithTheme(previewHtmlWithLocalCommunityPhoto(previewHtmlWithLocalSocialIcons(renderedHtml))) || "<p style=\"font-family:Arial,sans-serif;color:#68727f;\">No email design yet.</p>");
 
   const canSend = Boolean(
     emailPattern.test(elements.accountEmail.value.trim())
-      && elements.appPassword.value.trim()
+      && hasCredentials()
       && elements.subject.value.trim()
       && elements.body.value.trim()
       && elements.htmlBody.value.includes("{{content}}")
-      && recipients.length
+      && recipients.length && recipients.every(row=>emailPattern.test(row.email))
   );
   elements.testButton.disabled = sending || !canSend || !emailPattern.test(document.querySelector("#testEmail").value.trim());
   elements.sendButton.disabled = serverSendActive || sending || !canSend || audienceSource?.purpose === "browse";
+  const delivered = new Set(lastDelivery?.identity === currentCampaignIdentity() ? lastDelivery.emails || [] : []);
+  const remaining = recipients.filter(row => !delivered.has(String(row.email).toLowerCase())).length;
+  const alreadySent = recipients.length > 0 && remaining === 0;
+  if (alreadySent) elements.sendButton.disabled = true;
+  const sendLabel = document.getElementById('sendButtonLabel');
+  if (sendLabel) sendLabel.textContent = alreadySent ? 'Campaign sent' : delivered.size ? `Send to ${remaining} remaining` : 'Send campaign';
+  const sendNote = document.getElementById('sendAvailabilityNote');
+  if (sendNote) sendNote.textContent = alreadySent ? 'Already sent to every recipient in this list.' : 'One personalized email per recipient.';
   if (elements.summaryReady) {
-    elements.summaryReady.textContent = canSend && audienceSource?.purpose !== "browse" ? "Yes" : "No";
+    elements.summaryReady.textContent = alreadySent ? 'Sent' : canSend && audienceSource?.purpose !== "browse" ? 'Ready' : 'Needs attention';
   }
+  renderCampaignProgress(latestSendProgress);
   if (studioReady) syncStudio();
 }
 
+function campaignIdentity(draftName, subject, sender) {
+  return JSON.stringify([String(draftName || '').trim(), String(subject || ''), String(sender || '').trim().toLowerCase()]);
+}
+
+function currentCampaignIdentity() {
+  return campaignIdentity(elements.draftName.value, elements.subject.value, elements.accountEmail.value);
+}
+
+function campaignProgressKey(identity) {
+  let hash = 2166136261;
+  for (const char of identity) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  return (hash >>> 0).toString(36);
+}
+
+function progressMatchesCampaign(progress, identity, activeIdentity) {
+  if (!progress) return false;
+  if (progress.campaignKey) return progress.campaignKey === campaignProgressKey(identity);
+  return Boolean(activeIdentity && activeIdentity === identity);
+}
+
+async function confirmCampaignSend() {
+  if (document.documentElement.dataset.studioReady === 'true') {
+    return new Promise(resolve => document.dispatchEvent(new CustomEvent('mailbot:confirm-send', {
+      detail: { count: recipients.length, sender: elements.accountEmail.value.trim(), subject: elements.subject.value, resolve }
+    })));
+  }
+  return window.confirm(`Send ${recipients.length} emails from ${elements.accountEmail.value.trim()}?`);
+}
+
 async function testAuth() {
-  if (!elements.accountEmail.value.trim() || !elements.appPassword.value.trim()) {
+  if (!elements.accountEmail.value.trim() || !hasCredentials()) {
     setStatus("Gmail address and app password/OAuth token are required.", "error");
     showLogs([], "Connection test not started.");
     return;
@@ -1431,7 +1567,9 @@ async function testAuth() {
       throw new Error(payload.error || "Connection test failed.");
     }
 
-    setStatus("Gmail SMTP login successful. You can now send a test email.", "ok");
+    await refreshCredentialSession();
+    if (rememberedCredentialKey === credentialKey()) elements.appPassword.value = "";
+    setStatus("Gmail SMTP login successful. Password remembered for this Mailbot session.", "ok");
   } catch (error) {
     setStatus(error.message, "error");
   } finally {
@@ -1457,10 +1595,11 @@ async function send(testOnly) {
   if (testOnly && !emailPattern.test(testEmail)) { setStatus("Enter a valid test address.", "error"); return; }
 
   const verb = testOnly ? "Test email" : `${recipients.length} emails`;
-  const confirmed = testOnly || window.confirm(`Send ${verb} from ${elements.accountEmail.value.trim()}?`);
+  const confirmed = testOnly || await confirmCampaignSend();
   if (!confirmed) return;
 
   sending = true;
+  if (!testOnly) activeSendIdentity = currentCampaignIdentity();
   elements.testButton.disabled = true;
   elements.sendButton.disabled = true;
   setStatus(`Sending ${verb}... Keep this browser tab open.`);
@@ -1476,6 +1615,7 @@ async function send(testOnly) {
         smtpSecurity: elements.smtpSecurity.value,
         fromName: elements.fromName.value.trim(),
         draftName: elements.draftName.value.trim(),
+        campaignKey: campaignProgressKey(currentCampaignIdentity()),
         subject: elements.subject.value,
       body: elements.body.value,
         htmlBody: elements.htmlBody.value,
@@ -1496,10 +1636,24 @@ async function send(testOnly) {
     }
 
     const failed = payload.results.filter((result) => !result.ok);
+    if (!testOnly) {
+      const identity = currentCampaignIdentity();
+      const previous = lastDelivery?.identity === identity ? lastDelivery.emails || [] : [];
+      lastDelivery = {
+        identity,
+        emails: [...new Set([...previous, ...payload.results.filter(result => result.ok).map(result => String(result.email).toLowerCase())])],
+        total: payload.total,
+        failed: failed.length,
+        completedAt: new Date().toISOString(),
+      };
+      saveDraft();
+    }
     const auditWarnings = payload.results.filter(result => result.auditWarning);
     const lastTrace = payload.results.find((result) => result.trace?.length)?.trace || payload.trace || [];
     showLogs(lastTrace, failed.length ? "SMTP trace contains an error." : "SMTP trace successful.");
-    if (failed.length) {
+    if (payload.stopped) {
+      setStatus(`Sending stopped. ${payload.sent} sent · ${failed.length} failed · ${payload.remaining} not processed.`, 'ok');
+    } else if (failed.length) {
       setStatus(`${payload.sent}/${payload.total} sent. Failed for: ${failed.map((item) => item.email).join(", ")}`, "error");
     } else if (auditWarnings.length) {
       setStatus(`${payload.sent}/${payload.total} sent. Notion history needs synchronization for ${auditWarnings.length} emails. Do not resend.`, 'error');
@@ -1733,7 +1887,7 @@ elements.testButton.addEventListener("click", () => send(true));
 elements.sendButton.addEventListener("click", () => send(false));
 elements.testAuthButton.addEventListener("click", testAuth);
 elements.clearLogsButton.addEventListener("click", () => {
-  elements.smtpLogs.textContent = 'No SMTP logs yet. Use “Test connection” or send a test email.';
+  elements.smtpLogs.textContent = 'No delivery details recorded in this session.';
 });
 
 try {
@@ -1791,8 +1945,12 @@ function visualHtml(source) {
 
 function syncVisualEditor() {
   const editor = document.querySelector('#visualEditor');
+  const darkEmail = /single_line-white_text|club-logo-white\.png/.test(elements.htmlBody.value);
+  editor.style.backgroundColor = darkEmail ? '#0a2d57' : '';
+  editor.style.color = darkEmail ? '#e0eaf7' : '';
+  editor.style.colorScheme = darkEmail ? 'dark' : '';
   if (editor.dataset.source !== elements.body.value) {
-    editor.innerHTML = visualHtml(elements.body.value);
+    editor.innerHTML = previewHtmlWithLocalCommunityPhoto(visualHtml(elements.body.value));
     editor.dataset.source = elements.body.value;
     editorUndo.length = 0; editorRedo.length = 0; recordEditorHistory();
   }
@@ -1802,6 +1960,12 @@ function commitVisualEditor() {
   recordEditorHistory();
   const editor = document.querySelector('#visualEditor');
   const clone = editor.cloneNode(true);
+  // Local preview assets must never be saved into outgoing email HTML.
+  clone.querySelectorAll('img').forEach(image => {
+    for (const [remote, local] of Object.entries(localMailImageAssets())) {
+      if (image.getAttribute('src') === `${location.origin}${local}`) image.setAttribute('src', remote);
+    }
+  });
   // Browser formatting commands can leave empty wrappers behind.
   [...clone.querySelectorAll('span')].reverse().forEach(span => {
     const choice = span.dataset.mailFontChoice;
@@ -1810,7 +1974,9 @@ function commitVisualEditor() {
   });
   const macros = [];
   clone.querySelectorAll('.mail-button').forEach(el => { const index = macros.push(`button{{${el.dataset.label},${el.dataset.target},${el.dataset.variant || 'gradient'}}}`) - 1; el.replaceWith(document.createComment(`mail-button-${index}`)); });
-  elements.body.value = clone.innerHTML.replace(/<!--mail-button-(\d+)-->/g, (_,index) => macros[Number(index)]);
+  let outgoingEditorHtml = clone.innerHTML;
+  for (const [remote, local] of Object.entries(localMailImageAssets())) outgoingEditorHtml = outgoingEditorHtml.replaceAll(`${location.origin}${local}`, remote);
+  elements.body.value = outgoingEditorHtml.replace(/<!--mail-button-(\d+)-->/g, (_,index) => macros[Number(index)]);
   editor.dataset.source = elements.body.value;
   updatePreview();
   queueAutosave();
@@ -1907,6 +2073,7 @@ function restoreDesignSettings(settings) {
 
 
 function withClubLogo(template) {
+  if (/single_line-white_text\.svg|club-logo-white\.png/.test(String(template))) return template;
   if (!template) return template;
   let result = template;
   if (!result.includes(clubEmailLogoUrl)) {
@@ -1936,22 +2103,35 @@ function updateDesignPreview() {
 function syncStudio() {
   syncVisualEditor();
   const select = document.querySelector('#previewSelect');
-  const options = recipients.map((r,i) => `<option value="${i}">${escapeHtml(r.name || r.email)}</option>`).join('') || '<option value="0">Example without recipient</option>';
+  const options = recipients.map((r,i) => `<option value="${i}">${escapeHtml(r.name ? `${r.name} · ${r.email}` : r.email)}</option>`).join('') || '<option value="0">Example without recipient</option>';
   if (select.innerHTML !== options) select.innerHTML = options;
   select.value = String(previewIndex);
+  document.dispatchEvent(new CustomEvent('mailbot:campaign-state', {detail:{draftName:elements.draftName.value,canRefresh:!!audienceSource?.sourceId,tableName:recipients.length || elements.tableName.value !== 'Default list' ? elements.tableName.value : 'Choose a list'}}));
+  const campaignName = document.getElementById('activeCampaignName');
+  if (campaignName) campaignName.textContent = elements.draftName.value || 'Untitled draft';
+  const sender = document.getElementById('deliverySender');
+  if (sender) sender.textContent = elements.accountEmail.value || 'No sender connected';
+  for (const [page, complete] of [['recipients', recipients.length > 0], ['message', Boolean(elements.subject.value.trim() && elements.body.value.trim())]]) {
+    document.querySelector(`.workflow-nav [data-page-target="${page}"]`)?.classList.toggle('complete', complete);
+  }
   const checks = [
-    ...(!audienceSource ? [] : [[audienceSource.purpose !== 'browse', 'Notion sending purpose selected; eligibility rechecked before delivery', 'Review-only Notion list: choose a sending purpose']]),
-    [emailPattern.test(elements.accountEmail.value.trim()) && !!elements.appPassword.value.trim(),'Sender and credentials added','Set up sender account'],
-    [recipients.length > 0,`${recipients.length} recipients in the list`,'Add recipients'],
-    [!!elements.subject.value.trim(),'Subject added','Add a subject'],
-    [!!elements.body.value.trim(),'Email content added','Write your email'],
-    [elements.htmlBody.value.includes('{{content}}'),'Email layout added','Add {{content}} to the layout']
+    ...(!audienceSource ? [] : [[audienceSource.purpose !== 'browse', 'Audience is eligible', 'Choose an audience for sending', 'recipients']]),
+    [emailPattern.test(elements.accountEmail.value.trim()) && hasCredentials(),'Sender connected','Connect your sender account','account'],
+    [recipients.length > 0,`${recipients.length} recipients selected`,'Choose recipients','recipients'],
+    [recipients.every(row=>emailPattern.test(row.email)),'Recipient addresses ready','Complete the recipient email addresses','recipients'],
+    [!!elements.subject.value.trim(),'Subject ready','Add a subject','message'],
+    [!!elements.body.value.trim(),'Message ready','Write your message','message'],
+    [elements.htmlBody.value.includes('{{content}}'),'Design ready','Choose an email design','message']
   ];
-  document.querySelector('#sendChecklist').innerHTML = checks.map(([ok,yes,no])=>`<div class="${ok?'done':''}">${ok?'✓':'○'} &nbsp; ${escapeHtml(ok?yes:no)}</div>`).join('');
+  document.querySelector('#sendChecklist').innerHTML = checks.filter(([ok])=>!ok).map(([ok,yes,no,page])=>`<button type="button" data-page-target="${page}">○ &nbsp; ${escapeHtml(no)} →</button>`).join('');
 }
 
 function initStudio() {
   studioReady = true;
+  document.querySelector('.studio-brand')?.addEventListener('click',event=>{event.preventDefault();activatePage('recipients');});
+  document.addEventListener('mailbot:page-changed', () => requestAnimationFrame(fitVisiblePreviews));
+
+  window.addEventListener('resize', fitVisiblePreviews);
   const editor = document.querySelector('#visualEditor');
   document.addEventListener('selectionchange', rememberEditorSelection);
   recordEditorHistory();
@@ -1998,6 +2178,11 @@ function initStudio() {
   };
   document.querySelector('#editorFont').addEventListener('change',event=>applyTypography('font',event.target.value));
   document.querySelector('#editorFontWeight').addEventListener('change',event=>applyTypography('weight',event.target.value));
+  for (const [id, delta] of [['editorSizeDown',-2],['editorSizeUp',2]]) document.getElementById(id).addEventListener('click',()=>{
+    const input=document.getElementById('editorFontSize');
+    const size=Math.max(1,Math.min(200,Number(input.value || 16)+delta));
+    input.value=String(size);applyTypography('size',size);
+  });
   document.querySelector('#editorFontSize').addEventListener('change',event=>{
     const size = Number(event.target.value);
     if (Number.isFinite(size) && size >= 1 && size <= 200) applyTypography('size',size);
@@ -2036,6 +2221,12 @@ function initStudio() {
     elements.htmlBody.value=buildDesignTemplate();updatePreview();queueAutosave();document.querySelector('#designState').textContent='Applied to draft';setStatus('Design applied to this draft.','ok');
   });
   document.querySelector('#previewSelect').addEventListener('change',event=>{previewIndex=Number(event.target.value);updatePreview();});
+  for (const theme of ['light','dark']) document.getElementById(theme+'ThemePreview').addEventListener('click',()=>{
+    previewTheme = theme;
+    for (const name of ['light','dark']) {const button=document.getElementById(name+'ThemePreview');button.classList.toggle('selected',name===theme);button.setAttribute('aria-pressed',String(name===theme));}
+    document.querySelector('.full-preview').classList.toggle('dark-theme-preview',theme==='dark');
+    updatePreview();
+  });
   document.querySelector('#loadedContentPreview').addEventListener('click',()=>setPreviewImagesBlocked(false));
   document.querySelector('#blockedContentPreview').addEventListener('click',()=>setPreviewImagesBlocked(true));
   document.querySelector('#showPreviewImages').addEventListener('click',()=>setPreviewImagesBlocked(false));
@@ -2043,18 +2234,60 @@ function initStudio() {
     document.querySelector('.full-preview').classList.toggle('mobile',mode==='mobile');
     document.querySelector('#desktopPreview').classList.toggle('selected',mode==='desktop');
     document.querySelector('#mobilePreview').classList.toggle('selected',mode==='mobile');
+    fitVisiblePreviews();
   });
   document.querySelector('#testEmail').addEventListener('input',updatePreview);
+  document.querySelector('#sendChecklist').addEventListener('click', event => {
+    const target = event.target.closest('[data-page-target]');
+    if (target) activatePage(target.dataset.pageTarget);
+  });
+  document.addEventListener('mailbot:rename-column', event=>renameColumn(event.detail.index,event.detail.label));
+  document.addEventListener('mailbot:add-column', event=>addColumn(event.detail.label));
+  document.addEventListener('mailbot:add-person', ()=>{
+    addRecipient(true);
+    requestAnimationFrame(()=>document.querySelector('#recipientRows input[data-row-index="0"]')?.focus());
+  });
+  document.getElementById('newRecipientList').addEventListener('click',()=>{
+    const collection=readTableCollection();let name='New list',index=2;
+    while(collection[name])name=`New list ${index++}`;
+    recipients=[];audienceSource=null;recipientColumns=[{key:'name',label:'Name',role:'text'},{key:'email',label:'Email',role:'to'}];
+    elements.tableName.value=name;syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();
+  });
+  document.addEventListener('mailbot:select-draft',event=>{
+    const name=event.detail.name;if(!readDraftCollection()[name])return;
+    clearTimeout(autosaveTimer);saveDraft();elements.draftSelect.value=name;loadDraft(false);
+  });
+  document.addEventListener('mailbot:rename-draft',event=>{
+    const name=normalizeDraftName(event.detail.name), oldName=normalizeDraftName(elements.draftName.value);
+    if(name===oldName)return;const collection=readDraftCollection();
+    if(collection[name]){setStatus('A draft with this title already exists.','error');return;}
+    clearTimeout(autosaveTimer);const draft=collectDraft();draft.draftName=name;
+    if(draft.lastDelivery?.identity===campaignIdentity(oldName,draft.subject,draft.accountEmail))draft.lastDelivery={...draft.lastDelivery,identity:campaignIdentity(name,draft.subject,draft.accountEmail)};
+    delete collection[oldName];collection[name]=draft;writeDraftCollection(collection);applyDraft(draft,false);
+  });
+  document.addEventListener('mailbot:delete-draft',event=>{
+    const name=event.detail.name;clearTimeout(autosaveTimer);
+    if(name!==elements.draftName.value)saveDraft();
+    const collection=readDraftCollection();if(!collection[name])return;delete collection[name];writeDraftCollection(collection);
+    const next=Object.keys(collection)[0];updateDraftSelectOptions(next || '');
+    if(name===elements.draftName.value){if(next)applyDraft(collection[next],false);else document.getElementById('newDraft').click();}
+  });
+  document.addEventListener('mailbot:use-saved-list', event => {
+    const name = event.detail?.name;
+    const list = readTableCollection()[name];
+    if (list && applyTableState(list, true)) { saveDraft(); setStatus(`Using ${name}.`, 'ok'); }
+  });
   document.querySelector('#sidebarDrafts').addEventListener('click',event=>{
     const button=event.target.closest('[data-draft]');if(!button)return;
     clearTimeout(autosaveTimer);saveDraft();
     elements.draftSelect.value=button.dataset.draft;loadDraft(true);activatePage('message');
   });
   document.querySelector('#newDraft').addEventListener('click',()=>{
-    clearTimeout(autosaveTimer);saveDraft();
-    const collection=readDraftCollection();let name='New draft';let i=2;while(collection[name])name=`New draft ${i++}`;
+    clearTimeout(autosaveTimer);if(readDraftCollection()[elements.draftName.value])saveDraft();
+    const collection=readDraftCollection();let name='New mail';let i=2;while(collection[name])name=`New mail ${i++}`;
+    lastDelivery = null;
     setSelectedDraftName(name);elements.draftName.value=name;elements.subject.value='';elements.body.value='<p>Hi {{firstName}},</p><p><br></p><p>Best,<br>The Social AI Club Team</p>';
-    recipients=[];audienceSource=null;elements.tableName.value='Default list';syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('recipients');
+    recipients=[];audienceSource=null;recipientColumns=[{key:'name',label:'Name',role:'text'},{key:'email',label:'Email',role:'to'}];elements.tableName.value='Default list';syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('recipients');
   });
   document.querySelector('#deleteDraftButton').addEventListener('click',()=>{
     clearTimeout(autosaveTimer);
@@ -2076,6 +2309,7 @@ function setEditorMode(mode) {
 
 function setPreviewImagesBlocked(blocked) {
   previewImagesBlocked = blocked;
+  document.dispatchEvent(new CustomEvent('mailbot:preview-images', {detail:{blocked}}));
   document.querySelector('#loadedContentPreview').classList.toggle('selected', !blocked);
   document.querySelector('#blockedContentPreview').classList.toggle('selected', blocked);
   document.querySelector('#blockedPreviewNotice').hidden = !blocked;
@@ -2099,7 +2333,7 @@ function openReusableList(snapshot = null) {
   pendingListIsCurrent = !snapshot;
   pendingReusableList = snapshot || collectTableState();
   document.querySelector('#reusableListName').value = pendingReusableList.tableName || 'Saved audience';
-  document.querySelector('#reusableListHelp').textContent = `${pendingReusableList.recipients.length} contacts · A local snapshot for future campaigns.`;
+  document.querySelector('#reusableListHelp').textContent = `${pendingReusableList.recipients.length} ${pendingReusableList.recipients.length === 1 ? "contact" : "contacts"} · Saved on this computer.`;
   document.querySelector('#saveListDialog').showModal();
 }
 
@@ -2144,34 +2378,97 @@ activatePage(['recipients','message','review','contacts','account','preview','se
 import('./table-layout.js').then(({initContentSizedTables})=>initContentSizedTables());
 
 
-async function refreshSendProgress() {
+function campaignProgress(progress, identity, activeIdentity, receipt) {
+  if (progressMatchesCampaign(progress, identity, activeIdentity) && progress.total) return progress;
+  if (receipt?.identity !== identity || !receipt.emails?.length) return null;
+  return { state: 'finished', total: receipt.total || receipt.emails.length,
+    processed: receipt.emails.length + (receipt.failed || 0), sent: receipt.emails.length,
+    failed: receipt.failed || 0, skipped: 0, updatedAt: receipt.completedAt,
+    phase: 'Delivery recorded for this campaign.' };
+}
+
+function renderCampaignProgress(progress) {
   const panel = document.getElementById('sendProgress');
   if (!panel) return;
+  const current = campaignProgress(progress, currentCampaignIdentity(), activeSendIdentity, lastDelivery);
+  panel.hidden = !current;
+  const stopButton = document.getElementById('stopSendButton');
+  stopButton.hidden = !current || !['running', 'stopping'].includes(current.state);
+  stopButton.disabled = current?.state !== 'running';
+  stopButton.textContent = current?.state === 'stopping' ? 'Stopping…' : 'Stop sending';
+  if (!current) return;
+  const stale = Date.now() - Date.parse(current.lastActivity || current.updatedAt) > 60000;
+  document.getElementById('sendProgressTitle').textContent = current.state === 'finished' ? (current.sent >= current.total && !current.failed ? 'Campaign sent' : 'Delivery finished') : current.state === 'stopped' ? 'Sending stopped' : current.state === 'stopping' ? 'Stopping send…' : current.state === 'interrupted' ? 'Send interrupted' : stale ? 'No recent progress' : 'Sending in progress';
+  const bar = document.getElementById('sendProgressBar');
+  bar.max = current.total; bar.value = current.processed;
+  document.getElementById('sendProgressCounts').textContent = `${current.sent} sent · ${current.failed} failed · ${current.skipped} skipped · ${current.processed} / ${current.total} processed`;
+  document.getElementById('sendProgressDetail').textContent = current.phase || '';
+}
+
+async function refreshSendProgress() {
   try {
     let response = await fetch('/api/send/status', {cache:'no-store'});
-    let progress;
-    if (response.ok) progress = await response.json();
-    if (!response.ok) {
-      response = await fetch('/send-progress.json', {cache:'no-store'});
-      if (!response.ok) return;
-      progress = await response.json();
-    }
-    if (!progress?.total) {
-      const wasActive = serverSendActive; serverSendActive = false; panel.hidden = true;
-      if (wasActive) updatePreview();
-      return;
-    }
-    panel.hidden = false;
-    const stale = Date.now() - Date.parse(progress.lastActivity || progress.updatedAt) > 60000;
-    document.getElementById('sendProgressTitle').textContent = progress.state === 'finished' ? 'Send finished' : progress.state === 'interrupted' ? 'Send interrupted' : stale ? 'No recent progress' : progress.state === 'observing' ? 'Monitoring existing send' : 'Sending in progress';
-    const bar = document.getElementById('sendProgressBar');bar.max=progress.total;bar.value=progress.processed;
-    document.getElementById('sendProgressCounts').textContent = `${progress.sent} sent · ${progress.failed} failed · ${progress.skipped} skipped · ${progress.processed} / ${progress.total} processed`;
-    document.getElementById('sendProgressDetail').textContent = progress.phase || (progress.state === 'observing' ? 'Live delivery journal. A pause may mean the server is waiting for Google or Notion.' : 'SMTP acceptance does not confirm inbox delivery.');
+    if (!response.ok) response = await fetch('/send-progress.json', {cache:'no-store'});
+    if (!response.ok) return;
+    latestSendProgress = await response.json();
     const wasActive = serverSendActive;
-    serverSendActive = progress.state === 'running' || progress.state === 'observing';
+    serverSendActive = ['running', 'observing', 'stopping'].includes(latestSendProgress?.state);
+    renderCampaignProgress(latestSendProgress);
     if (serverSendActive) elements.sendButton.disabled = true;
     else if (wasActive) updatePreview();
-  } catch { if (!panel.hidden) document.getElementById('sendProgressDetail').textContent = 'Connection lost. Send status is unavailable; do not start another send.'; }
+  } catch {
+    if (serverSendActive) document.getElementById('sendProgressDetail').textContent = 'Connection lost. Waiting for the delivery status.';
+  }
 }
+document.getElementById('stopSendButton').addEventListener('click', async () => {
+  const button = document.getElementById('stopSendButton');
+  button.disabled = true;
+  button.textContent = 'Stopping…';
+  try {
+    const response = await fetch('/api/send/stop', {method:'POST'});
+    if (!response.ok) throw new Error('Could not request stop. Check the connection and try again.');
+    setStatus('Stop requested. The current email may finish; no further emails will start.');
+    await refreshSendProgress();
+  } catch (error) {
+    setStatus(error.message, 'error');
+    button.disabled = false;
+    button.textContent = 'Stop sending';
+  }
+});
 refreshSendProgress();
 setInterval(refreshSendProgress, 2000);
+
+
+async function refreshCredentialSession() {
+  const status = document.getElementById('credentialSessionStatus');
+  if (!status) return;
+  const key = credentialKey();
+  try {
+    const response = await fetch('/api/account/session', {
+      method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({accountEmail:elements.accountEmail.value.trim(),authMode:elements.authMode.value})
+    });
+    if (!response.ok) throw new Error('Session unavailable');
+    const data = await response.json();
+    if (credentialKey() !== key) return;
+    rememberedCredentialKey = data.available ? key : '';
+    status.textContent = data.available
+      ? 'Password remembered in Mailbot memory. Refreshing is fine. Restarting Mailbot or session expiry clears it.'
+      : 'Connect once to remember your password in Mailbot memory for up to 8 hours (OAuth: 50 minutes). Nothing is saved to disk.';
+    document.getElementById('forgetPasswordButton').hidden = !data.available;
+    if (data.available && !elements.appPassword.value) elements.appPassword.placeholder = 'Remembered for this Mailbot session';
+    updatePreview();
+  } catch { rememberedCredentialKey = ''; updatePreview(); }
+}
+elements.accountEmail.addEventListener('change', () => { elements.appPassword.value = ''; refreshCredentialSession(); });
+document.getElementById('forgetPasswordButton').addEventListener('click', async () => {
+  try {
+    const response = await fetch('/api/account/forget', {method:'POST'});
+    if (!response.ok) throw new Error('Could not forget the password.');
+    rememberedCredentialKey = ''; elements.appPassword.value = '';
+    updateAuthUi(); updatePreview();
+    setStatus('Password forgotten. Enter it again to connect.', 'ok');
+  } catch (error) { setStatus(error.message, 'error'); }
+});
+setInterval(refreshCredentialSession, 30_000);
+refreshCredentialSession();

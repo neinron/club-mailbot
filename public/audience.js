@@ -37,12 +37,20 @@ export function eligibility(contact, purpose, phase) {
   const complete = (p['Completed applications'] || []).includes(phase);
   const partial = (p['Incomplete applications'] || []).includes(phase);
   if (purpose === 'browse') return true;
+  if (p['Email delivery status'] === 'Suppressed') return false;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(p.Email || '').trim())) return false;
   if (purpose === 'newsletter') return p['Subscription status'] === 'Subscribed';
   if (purpose === 'recruiting') return p['Subscription status'] !== 'Unsubscribed' && p['Current member'] === false && !complete && !partial;
   if (purpose === 'deadline') return p['Subscription status'] !== 'Unsubscribed' && p['Current member'] === false && !complete;
   if (purpose === 'reminder') return p['Current member'] === false && partial && !complete && p['Application reminder eligible'] === true;
   return false;
+}
+
+// An explicitly requested club-member copy is scoped to a particular contact
+// and reminder audience. It never subscribes anyone or bypasses an opt-out.
+export function memberCopyAllowed(contact, {purpose,memberCopies=[]} = {}) {
+  const p=contact.properties;
+  return p['Email delivery status'] !== 'Suppressed' && purpose === 'reminder' && p['Current member'] === true && p['Subscription status'] !== 'Unsubscribed' && memberCopies.some(copy=>copy.notionPageId === contact.id && String(copy.email||'').trim().toLowerCase() === String(p.Email||'').trim().toLowerCase());
 }
 
 export const operators = {
@@ -93,14 +101,14 @@ export function matchFilter(properties, filter) {
   }
 }
 
-export function filterAudience(contacts, { purpose = 'browse', phase, filter, search = '', sortProperty = 'Name', sortDirection = 'asc', limit = 0 } = {}) {
+export function filterAudience(contacts, { purpose = 'browse', phase, filter, search = '', sortProperty = 'Name', sortDirection = 'asc', limit = 0, memberCopies = [] } = {}) {
   const query = search.trim().toLocaleLowerCase();
   const emails = new Map();
   for (const c of contacts) {
     const email = String(c.properties.Email || '').trim().toLowerCase();
     emails.set(email, (emails.get(email) || 0)+1);
   }
-  const eligible = contacts.filter(c => eligibility(c, purpose, phase) && (purpose === 'browse' || emails.get(String(c.properties.Email || '').trim().toLowerCase()) === 1));
+  const eligible = contacts.filter(c => (eligibility(c, purpose, phase) || memberCopyAllowed(c,{purpose,memberCopies})) && (purpose === 'browse' || emails.get(String(c.properties.Email || '').trim().toLowerCase()) === 1));
   const matched = eligible.filter(c => matchFilter(c.properties, filter) && (!query || Object.values(c.properties).some(v => String(v ?? '').toLocaleLowerCase().includes(query))));
   matched.sort((a,b) => {
     const x = a.properties[sortProperty], y = b.properties[sortProperty];

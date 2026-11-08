@@ -3,13 +3,15 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
+import {createCredentialSession} from '../server/credential-session.js';
+import {createSendControl} from '../server/send-control.js';
 import { createUnsubscribeToken } from '../server/unsubscribe.js';
 
 // Exercise the actual request handler with an in-memory SMTP transport.
 const serverSource = readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
 function setup() {
   const sent = [];
-  const context = vm.createContext({setTimeout:(fn)=>setTimeout(fn,0), URL, console, process, maxRecipients:250, createUnsubscribeToken, deliveryAudit: {previousAttempt: async()=>null, prepare: async rows => new Map(rows.map(r=>[r.email.toLowerCase(),{email:r.email,pageId:'test-page'}])), begin: async data => data, finish: async () => null}, validateNotionRecipients: async () => {}, sendViaGmailSmtp: async mail => {sent.push(mail);return {trace:[]};}});
+  const context = vm.createContext({assertDeliverableAddresses:async()=>{}, credentialSession:createCredentialSession(), sendControl: Object.assign(createSendControl(), {wait:async()=>{}}), setTimeout:(fn)=>setTimeout(fn,0), URL, console, process, maxRecipients:250, createUnsubscribeToken, deliveryAudit: {previousAttempt: async()=>null, prepare: async rows => new Map(rows.map(r=>[r.email.toLowerCase(),{email:r.email,pageId:'test-page'}])), begin: async data => data, finish: async () => null}, validateNotionRecipients: async () => {}, sendViaGmailSmtp: async mail => {sent.push(mail);return {trace:[]};}});
   vm.runInContext(serverSource.slice(serverSource.indexOf('const emailPattern'),serverSource.indexOf('async function serveStatic')).replace('if (recipients.length > maxRecipients)', 'if (recipients.length > 250)'),context);
   return {context,sent};
 }
@@ -212,4 +214,73 @@ test('send progress exposes counters and finishes without revealing addresses',a
  assert.equal(progress.state,'finished');assert.equal(progress.sent,2);assert.equal(progress.processed,2);assert.equal(progress.total,2);
  assert.doesNotMatch(JSON.stringify(progress),/@example/);
  assert.equal(context.handleSend.active,false);
+});
+
+test('logo header remains explicitly white in outgoing email without preview dark styles',()=>{
+ const {context}=setup();
+ const shell='<html><head></head><body><table><tr><td style="background:#000"><img src="https://tum-socialaiclub.de/assets/logos/LOGO_V6-ICON%2BTUM_SOCIAL_CLUB-single_line-dark_text.svg" width="320"></td></tr></table>{{content}}</body></html>';
+ const html=context.renderHtmlMessage(shell,'<p>Hi</p>',recipients[0],columns);
+ assert.match(html,/bgcolor="#ffffff" data-mailbot-navbar="true"/);
+ assert.match(html,/background-color:#ffffff!important/);
+ assert.match(html,/background-image:linear-gradient\(#ffffff,#ffffff\)/);
+ assert.doesNotMatch(html,/mailbotPreviewTheme|#15181d/);
+});
+
+test('HTML inbox padding never leaks entities into the plain-text alternative',()=>{
+ const {context}=setup();
+ const result=vm.runInContext(`plainTextFromHtml('<div data-mailbot-preheader="true">Hi Alex, apply by Monday.</div><div data-mailbot-preview-padding="true">&#8199;&#847;&shy;&nbsp;</div><h2>Application deadline</h2><p>Main body stays readable.</p>')`,context);
+ assert.match(result,/^Hi Alex, apply by Monday\./);
+ assert.match(result,/Main body stays readable\./);
+ assert.doesNotMatch(result,/8199|847|&shy;|&nbsp;/);
+});
+
+
+test('stopping a campaign journals the in-flight email and leaves later recipients untouched', async () => {
+ const {context,sent}=setup();
+ let entered, release;
+ const started=new Promise(resolve=>{entered=resolve;});
+ const gate=new Promise(resolve=>{release=resolve;});
+ context.sendViaGmailSmtp=async mail=>{sent.push(mail);entered();await gate;return {trace:[]};};
+ const pending=request(context,{...payload,testOnly:false});
+ await started;
+ context.sendControl.stop();
+ release();
+ const result=await pending;
+ assert.equal(result.status,200);
+ assert.equal(sent.length,1);
+ assert.equal(result.output.stopped,true);
+ assert.equal(result.output.sent,1);
+ assert.equal(result.output.remaining,1);
+ assert.equal(context.handleSend.progress.state,'stopped');
+ assert.equal(context.handleSend.active,false);
+});
+
+test('stop requested during contact preparation prevents any SMTP handoff', async () => {
+ const {context,sent}=setup();
+ const prepare=context.deliveryAudit.prepare;
+ context.deliveryAudit.prepare=async rows=>{context.sendControl.stop();return prepare(rows);};
+ const result=await request(context,{...payload,testOnly:false});
+ assert.equal(sent.length,0);assert.equal(result.output.remaining,2);
+ assert.equal(context.handleSend.progress.state,'stopped');
+});
+
+
+test('verified credentials can be reused without a password in the next send payload', async () => {
+ const {context,sent}=setup();
+ const first=await request(context,payload);assert.equal(first.status,200);
+ const second=await request(context,{...payload,authSecret:''});
+ assert.equal(second.status,200);assert.equal(sent.length,2);
+ assert.equal(sent[1].authSecret,'test-only');
+ assert.doesNotMatch(JSON.stringify(second.output),/test-only/);
+ context.credentialSession.forget();
+ const forgotten=await request(context,{...payload,authSecret:''});
+ assert.equal(forgotten.status,400);assert.equal(sent.length,2);
+});
+
+
+test('delivery exclusions block SMTP including copy addresses in manual lists',async()=>{
+ const {context,sent}=setup();
+ context.assertDeliverableAddresses=async addresses=>{assert.ok(addresses.includes('copy@example.com'));throw Error('Reported delivery failure');};
+ const result=await request(context,{...payload,testOnly:false});
+ assert.equal(result.status,500);assert.equal(sent.length,0);
 });
