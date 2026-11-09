@@ -1,13 +1,23 @@
+import { purposes } from './audience.js';
+import { touchpointField, touchpointLabel } from './contact-lists.js';
+
+function migrateTouchpointFilter(node) {
+  if (node.rules) return { ...node, rules: node.rules.map(migrateTouchpointFilter) };
+  if (node.property !== 'Lists') return { ...node };
+  const value = typeof node.value === 'string' && !node.partialMatch ? touchpointLabel(node.value) : node.value;
+  return { ...node, property: touchpointField, value };
+}
+
 // Old saved audiences become database filters; their sending purpose is not a view filter.
 export function viewSettings(source = {}) {
-  const filter = source.filter?.rules ? structuredClone(source.filter) : {match:'all',rules:[]};
+  const filter = source.filter?.rules ? (source.kind === 'csv' && !source.sourceId ? structuredClone(source.filter) : migrateTouchpointFilter(source.filter)) : {match:'all',rules:[]};
   const rules = [filter];
-  if(source.list)rules.push({property:'Lists',operator:'contains',value:source.list});
+  if(source.list)rules.push({property:touchpointField,operator:'contains',value:touchpointLabel(source.list)});
   if(source.applicationPhase)rules.push({property:'Application phases',operator:'contains',value:source.applicationPhase});
   if(source.event)rules.push({property:'Luma events',operator:'contains',value:source.event});
   if(source.membership)rules.push({property:'Current member',operator:'equals',value:source.membership});
   if(source.applicationStatus)rules.push({property:source.applicationStatus==='completed'?'Completed applications':'Incomplete applications',operator:source.applicationPhase?'contains':'not_empty',value:source.applicationPhase});
-  return {...(source.memberCopies?.length ? {memberCopies:structuredClone(source.memberCopies)} : {}),filter:rules.length===1?filter:{match:'all',rules},search:source.search||'',sortProperty:source.sortProperty||'Name',sortDirection:source.sortDirection||'asc',limit:Number(source.limit)||0};
+  return {...(source.memberCopies?.length ? {memberCopies:structuredClone(source.memberCopies)} : {}),filter:rules.length===1?filter:{match:'all',rules},search:source.search||'',sortProperty:source.sortProperty==='Lists' && source.sourceId ? touchpointField : source.sortProperty||'Name',sortDirection:source.sortDirection||'asc',limit:Number(source.limit)||0};
 }
 export function activeViewFilter(node) {
   if(node.rules){const rules=node.rules.map(activeViewFilter).filter(Boolean);return rules.length?{...node,rules}:null;}
@@ -21,47 +31,8 @@ export const filterOperatorLabels = {
   on:'on', on_or_before:'on or before', on_or_after:'on or after'
 };
 
-export function audienceSummary(source, details, hasApplicationPages) {
-  const settings = viewSettings(source || details || {});
-  const filter = activeViewFilter(settings.filter);
-  let customized = Boolean(details?.customized || source?.memberCopies?.length);
-  let ruleCount = 0;
-
-  function describe(node) {
-    if (node.rules) {
-      const rules = node.rules.map(rule => ({ label: describe(rule), join: rule.join || node.match })).filter(rule => rule.label);
-      const combined = rules.map(({label,join}, index) => index ? `${join === 'any' ? 'OR' : 'AND'} ${label}` : label).join(' ');
-      return rules.length > 1 ? `(${combined})` : combined;
-    }
-    if (['name','email','first name','last name'].includes(String(node.property || '').toLowerCase()) &&
-        ['equals','not_equals','contains','not_contains'].includes(node.operator)) {
-      customized = true;
-      return '';
-    }
-    if (++ruleCount > 3) return '';
-    const value = ['empty','not_empty'].includes(node.operator) ? '' : ` ${node.value}`;
-    return `${node.property} ${filterOperatorLabels[node.operator] || ''}${value}`.trim();
-  }
-
-  const rules = filter?.rules || (filter ? [filter] : []);
-  const criteria = rules.map(rule => ({ label: describe(rule), join: rule.join || filter.match })).filter(rule => rule.label);
-  const chips = criteria.map(({label,join}, index) => index ? `${join === 'any' ? 'OR' : 'AND'} ${label}` : label);
-  if (ruleCount > 3) chips.push(`+${ruleCount - 3} conditions`);
-  if (settings.search) {
-    if (settings.search.includes('@')) customized = true;
-    else chips.push(`Search: ${settings.search}`);
-  }
-  if (settings.limit) chips.push(`First ${settings.limit} matches`);
-  const purpose = { recruiting:'Application invitation', reminder:'Application reminder', deadline:'Application deadline', newsletter:'Newsletter subscribers', browse:'Review only' }[source?.purpose];
-  if (purpose) chips.unshift(purpose);
-  return {
-    origin: source?.sourceId ? 'Notion' : hasApplicationPages ? 'Application database' : details?.kind === 'csv' ? 'CSV / paste' : 'Manual group',
-    chips,
-    customized
-  };
-}
-export function namedViews(lists) {
-  return Object.keys(lists).sort((a,b)=>a.localeCompare(b,'en'));
+export function notionSelectionPurpose(purpose) {
+  return purpose !== 'browse' && Object.hasOwn(purposes, purpose) ? purpose : 'newsletter';
 }
 
 export function renameNamedList(lists, oldName, requestedName) {

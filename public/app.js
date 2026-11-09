@@ -12,6 +12,8 @@ let applyingEditorFormat = false;
 let composerResizeObserver = null;
 let persistCollection = () => Promise.reject(new Error("Storage is not ready."));
 let studioReady = false;
+const touchpointField = 'Touchpoints';
+let touchpointLabel;
 let editorMode = "visual";
 let previewIndex = 0;
 let previewImagesBlocked = false;
@@ -917,7 +919,7 @@ function getSelectedDraftName() {
 function updateDraftSelectOptions(selectedName = "") {
   const collection = readDraftCollection();
   renderSidebarDrafts(collection, selectedName);
-  const names = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
+  const names = namesByLastSaved(collection);
   const fallback = names.length ? names[0] : "";
   const activeName = selectedName && collection[selectedName] ? selectedName : fallback;
 
@@ -995,7 +997,7 @@ function getSelectedTableName() {
 function updateTableSelectOptions(selectedName = "") {
   if (!elements.tableSelect) return;
   const collection = readTableCollection();
-  const names = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
+  const names = namesByLastSaved(collection);
   const fallback = names.length ? names[0] : "";
   const activeName = selectedName && collection[selectedName] ? selectedName : fallback;
 
@@ -1084,6 +1086,13 @@ function queueAutosave() {
   }, autosaveDelayMs);
 }
 
+function flushDraftAutosave() {
+  if (autosaveTimer === null) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = null;
+  saveDraft();
+}
+
 function isNotionPageColumn(column) {
   return ['applicationpage', 'notionpage', 'notionpageid'].includes(String(column?.key || '').replace(/[^a-z]/gi, '').toLowerCase());
 }
@@ -1100,14 +1109,29 @@ function hydrateRecipientData(columns, rows, source = null, details = null) {
     }))
     : [...defaultRecipientColumns];
   recipients = Array.isArray(rows) ? rows.map(ensureRequiredRecipientFields) : [];
+  if (source?.sourceId && touchpointLabel) {
+    const oldColumn = recipientColumns.find(column => column.label === 'Lists' && column.key === 'lists');
+    if (oldColumn && !recipientColumns.some(column => column.label === touchpointField)) {
+      oldColumn.label = touchpointField;
+      if (oldColumn.notion) {
+        oldColumn.notion = { ...oldColumn.notion, name: touchpointField,
+          options: oldColumn.notion.options.map(touchpointLabel),
+          ...(oldColumn.notion.choices ? { choices: oldColumn.notion.choices.map(choice => ({ ...choice, name: touchpointLabel(choice.name) })) } : {})
+        };
+      }
+      recipients = recipients.map(row => ({ ...row, lists: String(row.lists ?? '').split('; ').map(touchpointLabel).join('; ') }));
+    }
+  }
   syncRawRecipientsFromTable();
   parseStats = { invalid: 0, duplicates: 0 };
   if (!notionFields) return;
   if (recipientColumns.some(column => column.key === 'applicationPage')) {
     recipientColumns = notionFields.attachNotionFields(recipientColumns, [], true);
   }
-  const originalFields = new Set(['name','first name','last name','email',...(source?.fields || []).map(name=>name.toLowerCase())]);
-  if (source?.sourceId && recipientColumns.some(column => !column.notion && originalFields.has(column.label.toLowerCase()))) {
+  const originalFields = new Set(['name','first name','last name','email',...(source?.fields || []).map(name=>(name === 'Lists' ? 'Touchpoints' : name).toLowerCase())]);
+  if (source?.sourceId && recipientColumns.some(column => column.notion
+    ? notionFields.isChoiceField(column.notion) && !column.notion.choices
+    : originalFields.has(column.label.toLowerCase()))) {
     const activeColumns = recipientColumns;
     legacyNotionSchema ||= fetch('/api/notion/fields').then(response => {
       if (!response.ok) throw new Error('Notion fields unavailable.');
@@ -1175,7 +1199,7 @@ function deleteTableState() {
 
   try {
     writeTableCollection(collection);
-    const remainingNames = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
+    const remainingNames = namesByLastSaved(collection);
     const nextName = remainingNames[0] || "Default list";
     updateTableSelectOptions(nextName);
     setSelectedTableName(nextName);
@@ -1255,7 +1279,7 @@ function deleteDraft() {
 
   try {
     writeDraftCollection(collection);
-    const remainingNames = Object.keys(collection).sort((left, right) => left.localeCompare(right, "en"));
+    const remainingNames = namesByLastSaved(collection);
     const nextName = remainingNames[0] || "Untitled draft";
     elements.draftName.value = nextName;
     updateDraftSelectOptions(nextName);
@@ -1456,8 +1480,8 @@ function updateTable() {
     return;
   }
   if (!recipientEditing) {
-    elements.recipientHead.innerHTML = '<tr><th>Name</th><th>Email</th><th>Lists</th><th><span class="sr-only">Contact details</span></th></tr>';
-    elements.recipientRows.innerHTML = recipients.length ? recipients.map((row,index)=>`<tr><td>${escapeHtml(row.name || '—')}</td><td>${escapeHtml(row.email)}</td><td><div class="contact-list-tags">${(recipientField(row,'Lists') || [recipientApplication(row),recipientField(row,'Origins')].filter(x=>x&&x!=='—').join('; ') || 'Local list').split('; ').map(tag=>`<span>${escapeHtml(tag)}</span>`).join('')}</div></td><td><button type="button" class="ghost" data-contact-details="${index}" aria-label="Details for ${escapeHtml(row.name || row.email)}">Details</button></td></tr>`).join('') : '<tr><td colspan="4" class="empty-table">Choose recipients to build this campaign’s audience.</td></tr>';
+    elements.recipientHead.innerHTML = '<tr><th>Name</th><th>Email</th><th>Touchpoints</th><th><span class="sr-only">Contact details</span></th></tr>';
+    elements.recipientRows.innerHTML = recipients.length ? recipients.map((row,index)=>`<tr><td>${escapeHtml(row.name || '—')}</td><td>${escapeHtml(row.email)}</td><td><div class="contact-list-tags">${(recipientField(row,touchpointField) || recipientField(row,'Lists') || [recipientApplication(row),recipientField(row,'Origins')].filter(x=>x&&x!=='—').join('; ') || 'Local list').split('; ').map(tag=>`<span>${escapeHtml(tag)}</span>`).join('')}</div></td><td><button type="button" class="ghost" data-contact-details="${index}" aria-label="Details for ${escapeHtml(row.name || row.email)}">Details</button></td></tr>`).join('') : '<tr><td colspan="4" class="empty-table">Choose recipients to build this campaign’s audience.</td></tr>';
     updateEditorVariables();
     return;
   }
@@ -1794,12 +1818,20 @@ elements.loadTableButton?.addEventListener('click', () => {
   setStatus(loaded ? 'Saved audience attached to this campaign.' : 'Could not load the list.', loaded ? 'ok' : 'error');
 });
 
-elements.deleteTableButton?.addEventListener("click", () => {
+const confirmAction = async options => (await import('./confirm-action.js')).confirmAction(options);
+
+elements.deleteTableButton?.addEventListener("click", async () => {
+  const name=elements.tableSelect.value;
+  if(!name || !await confirmAction({title:'Delete this saved group?',description:`“${name}” will be removed from the saved groups.`}) || elements.tableSelect.value!==name)return;
   const deleted = deleteTableState();
   setStatus(deleted ? "Recipient list deleted." : "Could not delete the list.", deleted ? "ok" : "error");
 });
 
-elements.clearButton.addEventListener("click", () => {
+elements.clearButton.addEventListener("click", async () => {
+  const rows=recipients;
+  const columns=recipientColumns;
+  if(!await confirmAction({title:'Clear this group?',description:'The recipients and table edits will be removed from this draft.',label:'Clear group'}) ||
+     rows!==recipients || columns!==recipientColumns)return;
   elements.rawRecipients.value = "";
   recipientColumns = [...defaultRecipientColumns];
   recipients = [];
@@ -1874,6 +1906,7 @@ elements.editorVariables?.addEventListener("click", (event) => {
   if (!(target instanceof HTMLElement)) return;
   const button = target.closest("[data-insert-variable]");
   if (!button) return;
+  button.closest("details").open = false;
   insertVariableAtCursor(button.getAttribute("data-insert-variable"));
 });
 
@@ -1902,7 +1935,7 @@ elements.recipientHead.addEventListener("click", (event) => {
   }
   const deleteButton = target.closest("[data-delete-column]");
   if (deleteButton) {
-    deleteColumn(Number(deleteButton.getAttribute("data-delete-column")));
+    requestColumnDeletion(Number(deleteButton.getAttribute("data-delete-column")));
   }
 });
 
@@ -1935,13 +1968,24 @@ elements.recipientRows.addEventListener("paste", (event) => {
   applyPastedRecipientTable(rowIndex, startColumnIndex, pastedText);
 });
 
-elements.recipientRows.addEventListener("click", (event) => {
+elements.recipientRows.addEventListener("click", async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   const button = target.closest("[data-remove-row]");
   if (!button) return;
-  removeRecipient(Number(button.getAttribute("data-remove-row")));
+  const index=Number(button.getAttribute("data-remove-row"));
+  const row=recipients[index];
+  if(!row || !await confirmAction({title:'Remove this recipient?',description:`${row.name || row.email || 'This person'} will be removed from this draft.`,label:'Remove'}) ||
+     recipients[index]!==row)return;
+  removeRecipient(index);
 });
+
+async function requestColumnDeletion(index) {
+  const column=recipientColumns[index];
+  if(!column || isNotionPageColumn(column) || !await confirmAction({title:'Delete this column?',description:`“${column.label}” and its values will be removed from this draft.`}) ||
+     recipientColumns[index]!==column)return;
+  deleteColumn(index);
+}
 
 [elements.accountEmail, elements.appPassword, elements.fromName, elements.replyTo, elements.draftName, elements.subject, elements.htmlBody].forEach((element) => {
   element.addEventListener("input", updatePreview);
@@ -1963,8 +2007,7 @@ elements.previewBody.addEventListener("input", () => {
 
 elements.draftSelect.addEventListener("change", () => {
   const targetName = elements.draftSelect.value;
-  clearTimeout(autosaveTimer);
-  saveDraft();
+  flushDraftAutosave();
   elements.draftSelect.value = targetName;
   loadDraft(true);
 });
@@ -1985,11 +2028,12 @@ elements.clearLogsButton.addEventListener("click", () => {
   elements.smtpLogs.textContent = 'No delivery details recorded in this session.';
 });
 
+const { namesByLastSaved, persistCollection: saveWorkspaceCollection, restoreWorkspace } = await import('./workspace-store.js');
 try {
   notionFields = await import('./notion-fields.js');
-  const workspaceStorage = await import('./workspace-store.js');
-  persistCollection = workspaceStorage.persistCollection;
-  await workspaceStorage.restoreWorkspace({ drafts: draftCollectionStorageKey, lists: tableCollectionStorageKey });
+  ({ touchpointLabel } = await import('./contact-lists.js'));
+  persistCollection = saveWorkspaceCollection;
+  await restoreWorkspace({ drafts: draftCollectionStorageKey, lists: tableCollectionStorageKey });
 } catch { setSaveStatus("Disk storage is unavailable. Browser copies are still available; retry saving when the server is running."); }
 updateAuthUi();
 updateDraftSelectOptions(getSelectedDraftName());
@@ -2007,7 +2051,7 @@ activatePage("message");
 function renderSidebarDrafts(collection, activeName) {
   const list = document.querySelector('#sidebarDrafts');
   if (!list) return;
-  list.innerHTML = Object.values(collection).sort((a,b) => String(b.savedAt).localeCompare(String(a.savedAt))).map(d => `<button type="button" data-draft="${escapeHtml(d.draftName)}" class="${d.draftName === activeName ? 'active' : ''}" title="${escapeHtml(d.draftName)}">${escapeHtml(d.draftName)}</button>`).join('');
+  list.innerHTML = namesByLastSaved(collection).map(name => collection[name]).map(d => `<button type="button" data-draft="${escapeHtml(d.draftName)}" class="${d.draftName === activeName ? 'active' : ''}" title="${escapeHtml(d.draftName)}">${escapeHtml(d.draftName)}</button>`).join('');
 }
 
 function cleanEditorHtml(html) {
@@ -2155,20 +2199,29 @@ function restoreEditorOffsets(offsets) {
   editor.ownerDocument.getSelection().setBaseAndExtent(...locate(offsets[0]), ...locate(offsets[1]));
 }
 
-function syncTypographyToolbar() {
-  const editor = visualEditor, selection = visualEditor.ownerDocument.getSelection();
-  if (!selection.rangeCount || !editor.contains(selection.anchorNode)) return;
-  const range = selection.getRangeAt(0), nodes = [];
-  if (range.collapsed) nodes.push(selection.anchorNode.nodeType === 1 ? selection.anchorNode : selection.anchorNode.parentElement);
-  else {
-    const walker = visualEditor.ownerDocument.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-    let node; while ((node = walker.nextNode())) {
-      if (!node.textContent.trim() || !range.intersectsNode(node)) continue;
-      const start = range.startContainer === node ? range.startOffset : 0;
-      const end = range.endContainer === node ? range.endOffset : node.length;
-      if (end > start) nodes.push(node.parentElement);
-    }
+const editorHeadingSelector = 'h1,h2,h3,h4,h5,h6';
+
+function editorSelectionElements() {
+  const selection = visualEditor.ownerDocument.getSelection();
+  if (!selection.rangeCount || !visualEditor.contains(selection.anchorNode)) return [];
+  const anchor = selection.anchorNode.nodeType === 1 ? selection.anchorNode : selection.anchorNode.parentElement;
+  const range = selection.getRangeAt(0);
+  if (range.collapsed) return [anchor];
+
+  const nodes = [];
+  const walker = visualEditor.ownerDocument.createTreeWalker(visualEditor, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (!node.textContent.trim() || !range.intersectsNode(node)) continue;
+    const start = range.startContainer === node ? range.startOffset : 0;
+    const end = range.endContainer === node ? range.endOffset : node.length;
+    if (end > start) nodes.push(node.parentElement);
   }
+  return nodes.length ? nodes : [anchor];
+}
+
+function syncTypographyToolbar() {
+  const nodes = editorSelectionElements();
   if (!nodes.length) return;
   const styles = nodes.map(node => node.ownerDocument.defaultView.getComputedStyle(node));
   const fields = [['editorFont', style=>style.fontFamily.split(',')[0].replace(/["']/g,'').trim()], ['editorFontSize', style=>String(Math.round(parseFloat(style.fontSize)))], ['editorFontWeight', style=>style.fontWeight === 'normal' ? '400' : style.fontWeight === 'bold' ? '700' : style.fontWeight]];
@@ -2179,7 +2232,39 @@ function syncTypographyToolbar() {
     control.title = values.length > 1 ? 'Mixed formatting' : values[0];
     if (control.tagName === 'INPUT') control.placeholder = values.length > 1 ? 'Mixed' : '';
   }
-  document.querySelectorAll('[data-format="bold"],[data-format="italic"]').forEach(button=>button.setAttribute('aria-pressed',String(visualEditor.ownerDocument.queryCommandState(button.dataset.format))));
+  document.dispatchEvent(new Event('mailbot:select-sync'));
+  document.querySelectorAll('#formatToolbar [data-format]').forEach(button => {
+    const {format, value} = button.dataset;
+    const pressed = format === 'formatBlock'
+      ? nodes.every(node => Boolean(node.closest(editorHeadingSelector)) === (value === 'h2'))
+      : visualEditor.ownerDocument.queryCommandState(format);
+    button.setAttribute('aria-pressed', String(pressed));
+  });
+}
+
+function styleEditorBlocks(tag) {
+  const blocks = new Set(editorSelectionElements().map(element => element.closest(tag)));
+  for (const block of blocks) {
+    if (!block || !visualEditor.contains(block)) continue;
+    for (const element of [block, ...block.querySelectorAll('span,b,strong,i,em,u,a')]) {
+      for (const property of ['font-family','font-size','font-weight','line-height']) element.style.removeProperty(property);
+      delete element.dataset.mailFontChoice;
+      delete element.dataset.mailTypography;
+    }
+    block.style.removeProperty('margin');
+    if (tag === 'h2') {
+      block.dataset.mailFontChoice = 'League Spartan';
+      Object.assign(block.style, {
+        fontFamily: "'League Spartan',Arial,Helvetica,sans-serif",
+        fontSize: '36px',
+        fontWeight: '800',
+        lineHeight: '1.1',
+        margin: '0 0 24px'
+      });
+    } else {
+      block.style.fontFamily = "'Albert Sans',Arial,Helvetica,sans-serif";
+    }
+  }
 }
 
 function rememberEditorSelection() {
@@ -2253,8 +2338,6 @@ function publishCampaignState() {
     tableName: hasAudience ? elements.tableName.value : 'Choose a group',
     canRefresh: Boolean(audienceSource?.sourceId),
     hasAudience,
-    hasApplicationPages: recipientColumns.some(column => column.key.toLowerCase() === 'applicationpage'),
-    audienceSource,
     audienceDetails
   }}));
 }
@@ -2283,7 +2366,7 @@ function syncStudio() {
     [!!elements.body.value.trim(),'Message ready','Write your message','message'],
     [elements.htmlBody.value.includes('{{content}}'),'Design ready','Choose an email design','message']
   ];
-  document.querySelector('#sendChecklist').innerHTML = checks.filter(([ok])=>!ok).map(([ok,yes,no,page])=>`<button type="button" data-page-target="${page}">○ &nbsp; ${escapeHtml(no)} →</button>`).join('');
+  document.querySelector('#sendChecklist').innerHTML = checks.filter(([ok])=>!ok).map(([ok,yes,no,page])=>`<button type="button" data-page-target="${page}"><svg class="control-icon" aria-hidden="true"><use href="#mailbot-icon-circle"/></svg> ${escapeHtml(no)} <svg class="control-icon" aria-hidden="true"><use href="#mailbot-icon-next"/></svg></button>`).join('');
 }
 
 function initStudio() {
@@ -2301,7 +2384,7 @@ function initStudio() {
     }
   });
   document.querySelector('#formatToolbar').addEventListener('keydown',event=>{
-    if ((event.metaKey || event.ctrlKey) && ['z','y'].includes(event.key.toLowerCase())) { event.preventDefault(); travelEditorHistory(event.shiftKey || event.key.toLowerCase() === 'y'); }
+    if (editorMode === 'visual' && (event.metaKey || event.ctrlKey) && ['z','y'].includes(event.key.toLowerCase())) { event.preventDefault(); travelEditorHistory(event.shiftKey || event.key.toLowerCase() === 'y'); }
   });
   editor.addEventListener('keydown',event=>{
     if ((event.metaKey || event.ctrlKey) && ['z','y'].includes(event.key.toLowerCase())) { event.preventDefault(); travelEditorHistory(event.shiftKey || event.key.toLowerCase() === 'y'); }
@@ -2353,8 +2436,18 @@ function initStudio() {
     if (Number.isFinite(size) && size >= 1 && size <= 200) applyTypography('size',size);
   });
   document.querySelector('#insertDivider').addEventListener('click',()=>insertEditorHtml('<hr style="border:0;border-top:1px solid #dbe3ec;margin:24px 0;">'));
-  document.querySelectorAll('[data-format]').forEach(button=>button.addEventListener('click',()=>{
-    restoreEditorSelection(); visualEditor.ownerDocument.execCommand(button.dataset.format,false,button.dataset.value || null); commitVisualEditor();
+  document.querySelectorAll('#formatToolbar [data-format]').forEach(button => button.addEventListener('click', () => {
+    const {format, value} = button.dataset;
+    restoreEditorSelection();
+    applyingEditorFormat = true;
+    try {
+      visualEditor.ownerDocument.execCommand(format, false, value || null);
+      if (format === 'formatBlock') styleEditorBlocks(value);
+      rememberEditorSelection();
+    } finally {
+      applyingEditorFormat = false;
+    }
+    commitVisualEditor();
   }));
   document.querySelector('#insertButton').addEventListener('click',()=>openLinkDialog('button'));
   document.querySelector('#insertLink').addEventListener('click',()=>openLinkDialog('link'));
@@ -2411,18 +2504,28 @@ function initStudio() {
     const {index,key,value} = event.detail;
     updateRecipientCell(index,key,value);
   });
-  document.addEventListener('mailbot:delete-column', event=>deleteColumn(event.detail.index));
+  document.addEventListener('mailbot:delete-column', event=>requestColumnDeletion(event.detail.index));
   document.addEventListener('mailbot:rename-column', event=>renameColumn(event.detail.index,event.detail.label));
   document.addEventListener('mailbot:add-column', event=>addColumn(event.detail.label));
   document.addEventListener('mailbot:add-person', ()=>{
     addRecipient(true);
     requestAnimationFrame(()=>document.querySelector('#recipientRows input[data-row-index="0"]')?.focus());
   });
+  document.addEventListener('mailbot:import-group', async ()=>{
+    const groupName = elements.tableName.value;
+    if (!await notionBrowserReady || elements.tableName.value !== groupName) return;
+    document.dispatchEvent(new CustomEvent('mailbot:open-audience', {detail:{
+      source:'notion',
+      groupName:groupName==='Default list' ? '' : groupName
+    }}));
+  });
   document.getElementById('newRecipientList').addEventListener('click',()=>{
     const collection=readTableCollection();let name='New group',index=2;
-    while(collection[name])name=`New group ${index++}`;
+    while(Object.hasOwn(collection,name) || name===elements.tableName.value)name=`New group ${index++}`;
     recipients=[];audienceSource=null;audienceDetails=null;recipientColumns=[{key:'name',label:'Name',role:'text'},{key:'email',label:'Email',role:'to'}];
+    parseStats={invalid:0,duplicates:0};
     elements.tableName.value=name;syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();
+    document.dispatchEvent(new CustomEvent('mailbot:import-group'));
   });
   document.addEventListener('mailbot:rename-group', async event => {
     const name = event.detail.name.trim();
@@ -2444,7 +2547,7 @@ function initStudio() {
   });
   document.addEventListener('mailbot:select-draft',event=>{
     const name=event.detail.name;if(!readDraftCollection()[name])return;
-    clearTimeout(autosaveTimer);saveDraft();elements.draftSelect.value=name;loadDraft(false);
+    flushDraftAutosave();elements.draftSelect.value=name;loadDraft(false);
   });
   document.addEventListener('mailbot:rename-draft',event=>{
     const name=normalizeDraftName(event.detail.name), oldName=normalizeDraftName(elements.draftName.value);
@@ -2455,10 +2558,13 @@ function initStudio() {
     delete collection[oldName];collection[name]=draft;writeDraftCollection(collection);applyDraft(draft,false);
   });
   document.addEventListener('mailbot:delete-draft',event=>{
-    const name=event.detail.name;clearTimeout(autosaveTimer);
-    if(name!==elements.draftName.value)saveDraft();
+    const name=event.detail.name;
+    if(name===elements.draftName.value){
+      clearTimeout(autosaveTimer);
+      autosaveTimer=null;
+    }else flushDraftAutosave();
     const collection=readDraftCollection();if(!collection[name])return;delete collection[name];writeDraftCollection(collection);
-    const next=Object.keys(collection)[0];updateDraftSelectOptions(next || '');
+    const next=namesByLastSaved(collection)[0];updateDraftSelectOptions(next || '');
     if(name===elements.draftName.value){if(next)applyDraft(collection[next],false);else document.getElementById('newDraft').click();}
   });
   document.addEventListener('mailbot:use-saved-list', event => {
@@ -2468,11 +2574,11 @@ function initStudio() {
   });
   document.querySelector('#sidebarDrafts').addEventListener('click',event=>{
     const button=event.target.closest('[data-draft]');if(!button)return;
-    clearTimeout(autosaveTimer);saveDraft();
+    flushDraftAutosave();
     elements.draftSelect.value=button.dataset.draft;loadDraft(true);activatePage('message');
   });
   document.querySelector('#newDraft').addEventListener('click',()=>{
-    clearTimeout(autosaveTimer);if(readDraftCollection()[elements.draftName.value])saveDraft();
+    flushDraftAutosave();
     const collection=readDraftCollection();let name='New mail';let i=2;while(collection[name])name=`New mail ${i++}`;
     lastDelivery = null;
     setSelectedDraftName(name);elements.draftName.value=name;elements.subject.value='';elements.replyTo.value='';elements.body.value='<p>Hi {{firstName}},</p><p><br></p><p>Best,<br>The Social AI Club Team</p>';
@@ -2489,10 +2595,13 @@ function initStudio() {
 function setEditorMode(mode) {
   editorMode=mode;
   document.getElementById('composerCanvas').hidden=mode!=='visual';
-  document.querySelector('#formatToolbar').hidden=mode!=='visual';
+  document.getElementById('formatToolbar').dataset.editorMode = mode;
   elements.body.hidden=mode==='visual';
-  document.querySelector('#visualMode').classList.toggle('selected',mode==='visual');
-  document.querySelector('#sourceMode').classList.toggle('selected',mode==='source');
+  for (const [id, editorView] of [['visualMode','visual'],['sourceMode','source']]) {
+    const button = document.getElementById(id);
+    button.classList.toggle('selected', mode === editorView);
+    button.setAttribute('aria-pressed', String(mode === editorView));
+  }
   if(mode==='visual'){syncVisualEditor();requestAnimationFrame(fitComposerFrame);}
 }
 
@@ -2511,6 +2620,7 @@ function openLinkDialog(kind,button=null) {
   document.querySelector('#linkLabel').value=button?.dataset.label||'';
   document.querySelector('#linkTarget').value=button?.dataset.target||'';
   document.querySelector('#buttonVariant').value=button?.dataset.variant||'gradient';
+  document.dispatchEvent(new Event('mailbot:select-sync'));
   document.querySelector('#buttonVariantField').hidden=kind!=='button';
   document.querySelector('#linkError').textContent='';
   document.querySelector('#saveLink').textContent=button?'Apply':'Insert';
@@ -2539,7 +2649,7 @@ elements.recipientRows.addEventListener('click',event=>{
   document.querySelector('#contactDialog').showModal();
 });
 
-import('./notion-ui.js').then(({initNotionBrowser}) => initNotionBrowser({
+const notionBrowserReady = import('./notion-ui.js').then(({initNotionBrowser}) => initNotionBrowser({
   setStatus,
   getCurrentSource:()=>audienceSource,
   getCurrentGroup:()=>({name:elements.tableName.value, draft:elements.draftName.value, details:audienceDetails}),

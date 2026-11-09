@@ -3,15 +3,6 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { notionPropertyValue } from './notion-cli.js';
 
-export const deliveryProperties = {
-  'Last email sent at': { date: {} },
-  'Last email attempt at': { date: {} },
-  'Last email subject': { rich_text: {} },
-  'Last email campaign': { rich_text: {} },
-  'Last email status': { select: { options: [
-    { name: 'Sent', color: 'green' }, { name: 'Failed', color: 'red' }, { name: 'Unknown', color: 'yellow' }
-  ] } }
-};
 const text = content => [{ type: 'text', text: { content: String(content).slice(0, 1900) } }];
 const norm = email => String(email || '').trim().toLowerCase();
 
@@ -26,14 +17,14 @@ export function deliveryRecorder({ directory, sourceId, request, query }) {
   }
   async function prepare(recipients) {
     const schema = await request(`/data_sources/${sourceId}`);
-    for (const [name, config] of Object.entries(deliveryProperties)) {
-      if (!schema.properties[name] || schema.properties[name].type !== Object.keys(config)[0]) throw Error('Notion delivery history is not configured.');
-    }
     const pages = await query(sourceId), byEmail = new Map();
     for (const page of pages.filter(p => !p.archived && !p.in_trash)) {
       const email = norm(notionPropertyValue(page.properties.Email));
       const matches = byEmail.get(email) || []; matches.push(page); byEmail.set(email, matches);
     }
+    const provenance = schema.properties.Touchpoints?.multi_select?.options?.some(option => option.name === 'Manual import')
+      ? { Touchpoints: { multi_select: [{ name: 'Manual import' }] } }
+      : {};
     const contacts = new Map();
     for (const recipient of recipients) {
       const email = norm(recipient.email), matches = byEmail.get(email) || [];
@@ -45,7 +36,7 @@ export function deliveryRecorder({ directory, sourceId, request, query }) {
           parent: { type: 'data_source_id', data_source_id: sourceId },
           properties: { Name: { title: text(recipient.name || email) }, Email: { email },
             'Subscription status': { select: { name: 'Not subscribed' } },
-            Source: { rich_text: text('Mailbot manual list') } }
+            ...provenance }
         } });
         byEmail.set(email, [page]);
       }
@@ -86,17 +77,6 @@ export function deliveryRecorder({ directory, sourceId, request, query }) {
           rich_text: text(`${marker}\n${event.status === 'Sent' ? 'Sent (accepted by SMTP; inbox delivery is not verified)' : event.status === 'Failed' ? 'Failed (SMTP did not confirm acceptance)' : 'Unknown (interrupted attempt; check before retrying)'}\nTime: ${event.at}\nCampaign: ${event.campaign}\nSubject: ${event.subject}\nSender: ${event.sender}\nPurpose: ${event.purpose || 'Manual list'}`)
         } }] } });
       }
-      const properties = {};
-      const previous = notionPropertyValue(page.properties['Last email attempt at']);
-      if (!previous || previous <= event.at) Object.assign(properties, {
-        'Last email attempt at': { date: { start: event.at } },
-        'Last email subject': { rich_text: text(event.subject) },
-        'Last email campaign': { rich_text: text(event.campaign) },
-        'Last email status': { select: { name: event.status } }
-      });
-      const previousSent = notionPropertyValue(page.properties['Last email sent at']);
-      if (event.status === 'Sent' && (!previousSent || previousSent <= event.at)) properties['Last email sent at'] = { date: { start: event.at } };
-      if (Object.keys(properties).length) await request(`/pages/${contact.pageId}`, { method: 'PATCH', body: { properties } });
       event.completedPages.push(contact.pageId); await save(event);
     }
     event.pending = false; await save(event);

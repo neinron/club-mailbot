@@ -50,8 +50,20 @@ test('existing application groups recover choice fields and retain them when a c
  assert.equal(context.recipientColumns[2].notion.name,'Status');
  context.renameColumn(1,'Department');
  assert.equal(context.recipientColumns[1].notion.name,'Suggested Department');
+ assert.equal(notionFields.notionOptionColor(context.recipientColumns[1].notion,'Social Partnerships'),'pink');
  context.updateRecipientCell(0,'suggestedDepartment','Invented department');
  assert.equal(context.recipients[0].suggestedDepartment,'Engineering');
  context.updateRecipientCell(0,'suggestedDepartment','Marketing');
  assert.equal(context.recipients[0].suggestedDepartment,'Marketing');
+});
+
+test('saved choices gain colors while keeping their original options and labels',()=>{
+ const [column]=notionFields.attachNotionFields(
+  [{key:'department',label:'Team',notion:{name:'Department',type:'select',options:['Old team','Engineering']}}],
+  [{name:'Department',type:'select',options:['Engineering'],choices:[{name:'Engineering',color:'blue'}]}]
+ );
+ assert.equal(column.label,'Team');
+ assert.deepEqual(column.notion.options,['Old team','Engineering']);
+ assert.equal(notionFields.notionOptionColor(column.notion,'Engineering'),'blue');
+ assert.equal(notionFields.notionOptionColor(column.notion,'Old team'),'default');
 });

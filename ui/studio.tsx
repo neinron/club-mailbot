@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { ArrowRight, ChevronDown, Database, FileUp, FileDown, Mail, Send, Plus, X, Pencil, Info, Trash2, Bold, Italic, List, Link, Minus, AArrowDown, AArrowUp, Ellipsis, ExternalLink, RefreshCw, Save, ListFilter } from 'lucide-react';
-import { audienceSummary } from '../public/recipient-views.js';
-import { choiceValues } from '../public/notion-fields.js';
+import { ArrowRight, ChevronDown, Database, FileUp, FileDown, Mail, Send, Plus, X, Pencil, Info, Trash2, Bold, Italic, Underline, List, Link, Ellipsis, ExternalLink, RefreshCw, Save } from 'lucide-react';
+import { namesByLastSaved } from '../public/workspace-store.js';
+import { choiceValues, isChoiceField, notionOptionColor } from '../public/notion-fields.js';
+import { initStyledSelects } from '@/ui/styled-selects';
 import { Button } from '@/ui/components/ui/button';
 import { Badge } from '@/ui/components/ui/badge';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, CardAction } from '@/ui/components/ui/card';
@@ -12,7 +13,7 @@ import { Input } from '@/ui/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/ui/components/ui/native-select';
 import { ToggleGroup, ToggleGroupItem } from '@/ui/components/ui/toggle-group';
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from '@/ui/components/ui/alert-dialog';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@/ui/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator } from '@/ui/components/ui/dropdown-menu';
 
 // These roots own only the new controls. The existing editor and audience engine
 // keep their DOM and data ownership, so saved campaigns do not need migration.
@@ -167,9 +168,9 @@ function AudienceMenu() {
     <DropdownMenuTrigger asChild><Button id="changeRecipients" className="list-title-picker" variant="outline" type="button" aria-label={title} title={title}><span>{title}</span><ChevronDown data-icon="inline-end" /></Button></DropdownMenuTrigger>
     <DropdownMenuContent align="start" className="audience-menu">
       <DropdownMenuGroup className="audience-menu-lists">
-        {Object.entries(lists).sort(([a], [b]) => a.localeCompare(b)).map(([name, list]) =>
+        {namesByLastSaved(lists).map(name =>
           <DropdownMenuItem key={name} onSelect={() => document.dispatchEvent(new CustomEvent('mailbot:use-saved-list', { detail: { name } }))}>
-            <span className="audience-menu-name">{name}</span><span className="audience-menu-count">{list.recipients.length}</span>
+            <span className="audience-menu-name">{name}</span><span className="audience-menu-count">{lists[name].recipients.length}</span>
           </DropdownMenuItem>)}
       </DropdownMenuGroup>
       {Object.keys(lists).length > 0 && <DropdownMenuSeparator />}
@@ -203,7 +204,7 @@ function RecipientTools() {
   const refresh = () => document.dispatchEvent(new CustomEvent('mailbot:refresh-audience'));
   return <div className="recipient-actions">
     <Button id="openSaveList" type="button" variant="outline" size="icon" aria-label="Save group" title="Save group"><Save /></Button>
-    <Button type="button" variant="outline" size="icon" aria-label="Refresh from Notion" title={canRefresh ? 'Refresh from Notion' : 'This group has no saved Notion filters'} disabled={!canRefresh || refreshing} onClick={() => customized ? setConfirmRefresh(true) : refresh()}><RefreshCw className={refreshing ? 'animate-spin' : ''} /></Button>
+    <Button id="refreshGroup" type="button" variant="outline" size="icon" aria-label="Refresh from Notion" title={canRefresh ? 'Refresh from Notion' : 'This group has no saved Notion filters'} aria-busy={refreshing} disabled={!canRefresh || refreshing} onClick={() => customized ? setConfirmRefresh(true) : refresh()}><RefreshCw /></Button>
     <Button id="clearButton" type="button" variant="outline" size="icon" aria-label="Clear current group" title="Clear current group"><Trash2 /></Button>
     <AlertDialog open={confirmRefresh} onOpenChange={setConfirmRefresh}>
       <AlertDialogContent>
@@ -214,25 +215,17 @@ function RecipientTools() {
   </div>;
 }
 
-function AudienceSummary() {
-  const [summary, setSummary] = useState<ReturnType<typeof audienceSummary> | null>(null);
+function ManualEditMarker() {
+  const [edited, setEdited] = useState(false);
   useEffect(() => {
-    const sync = (event: Event) => {
-      const {hasAudience, audienceSource, audienceDetails, hasApplicationPages} = (event as CustomEvent).detail;
-      setSummary(hasAudience ? audienceSummary(audienceSource, audienceDetails, hasApplicationPages) : null);
-    };
+    const sync = (event: Event) => setEdited(Boolean((event as CustomEvent).detail.audienceDetails?.customized));
     document.addEventListener('mailbot:campaign-state', sync);
     return () => document.removeEventListener('mailbot:campaign-state', sync);
   }, []);
-  if (!summary) return null;
-  return <div className="group-criteria" aria-label="How this group was selected">
-    <span className="audience-origin"><ListFilter aria-hidden="true" />{summary.origin}</span>
-    {summary.chips.map((label, index) => <Badge key={index} variant="outline" title={label}>{label}</Badge>)}
-    {summary.customized && <Badge variant="secondary" title="Individual selections or local table changes">Customized</Badge>}
-  </div>;
+  return edited ? <Badge variant="secondary">Manually Edited</Badge> : null;
 }
 
-type NotionField = {name:string; type:string; notionType?:string; options:string[]};
+type NotionField = {name:string; type:string; notionType?:string; options:string[]; choices?:{name:string;color:string}[]};
 type Column = { key: string; label: string; role: string; readOnly?: boolean; notion?:NotionField };
 
 function notionPageHref(value = '') {
@@ -347,7 +340,13 @@ function RecipientTable() {
         }} />
       : <Button variant="ghost" size="icon-sm" type="button" aria-label="Add column" onClick={() => setAdding(true)}><Plus /></Button>}
     </th></tr></thead>
-    <tbody id="recipientRows"><tr className="add-person-row">{data.columns.map((column,index)=><td key={column.key}>{index===0?<Button id="gridAddPerson" type="button" variant="ghost" size="icon-sm" aria-label="Add person" onClick={()=>document.dispatchEvent(new CustomEvent('mailbot:add-person'))} disabled={!data.canAdd} title={data.canAdd?'Add a person':'Add contacts in Notion, then refresh this list.'}><Plus /></Button>:<span className="cell-placeholder" />}</td>)}<td /></tr>
+    <tbody id="recipientRows">{data.rows.length ? <tr className="add-person-row">{data.columns.map((column,index)=><td key={column.key}>{index===0?<Button id="gridAddPerson" type="button" variant="ghost" size="icon-sm" aria-label="Add person" onClick={()=>document.dispatchEvent(new CustomEvent('mailbot:add-person'))} disabled={!data.canAdd} title={data.canAdd?'Add a person':'Add contacts in Notion, then refresh this list.'}><Plus /></Button>:<span className="cell-placeholder" />}</td>)}<td /></tr>
+      : <tr><td className="recipient-empty-cell" colSpan={data.columns.length+1}>
+        <div className="recipient-empty-actions">
+          <Button type="button" variant="outline" disabled={!data.canAdd} onClick={()=>document.dispatchEvent(new CustomEvent('mailbot:add-person'))}><Plus data-icon="inline-start" />Add manually</Button>
+          <Button type="button" variant="outline" onClick={()=>document.dispatchEvent(new CustomEvent('mailbot:import-group'))}><Database data-icon="inline-start" />Import from Notion</Button>
+        </div>
+      </td></tr>}
       {data.rows.map((row,index)=><tr key={index}>{data.columns.map(column=><td key={column.key}><RecipientCell key={row[column.key]} column={column} index={index} value={row[column.key] ?? ''} /></td>)}<td className="row-tools"><Button type="button" variant="ghost" size="icon-sm" data-contact-details={index} aria-label={`Details for ${row.name || row.email || 'person'}`}><Info /></Button><Button type="button" variant="ghost" size="icon-sm" data-remove-row={index} aria-label={`Remove ${row.name || row.email || 'person'}`}><X /></Button></td></tr>)}
     </tbody></table></div>;
 }
@@ -360,12 +359,8 @@ function RecipientCell({column, index, value}: {column:Column; index:number; val
   if (field?.type === 'multi_select') {
     return <RecipientMultiSelect field={field} label={label} value={value} change={change} />;
   }
-  if (field && ['select','status'].includes(field.type)) {
-    return <NativeSelect className="recipient-select" aria-label={label} defaultValue={value} onChange={event=>change(event.currentTarget.value)}>
-      <NativeSelectOption value="">—</NativeSelectOption>
-      {value && !field.options.includes(value) && <NativeSelectOption value={value} disabled>{value}</NativeSelectOption>}
-      {field.options.map(option=><NativeSelectOption key={option} value={option}>{option}</NativeSelectOption>)}
-    </NativeSelect>;
+  if (field && isChoiceField(field)) {
+    return <RecipientSingleSelect field={field} label={label} value={value} change={change} />;
   }
   if (field?.type === 'checkbox') {
     return <input type="checkbox" aria-label={label} defaultChecked={value === 'true'} onChange={event=>change(String(event.currentTarget.checked))} />;
@@ -375,13 +370,35 @@ function RecipientCell({column, index, value}: {column:Column; index:number; val
   return <Input type={type} step={type === 'number' ? 'any' : undefined} defaultValue={value} data-row-index={index} data-column-key={column.key} aria-label={label} />;
 }
 
+function NotionChoicePill({field,value}: {field:NotionField;value:string}) {
+  return <span className="notion-choice-pill" data-notion-color={notionOptionColor(field,value)}>{value}</span>;
+}
+
+function RecipientSingleSelect({field,label,value,change}: {field:NotionField;label:string;value:string;change:(value:string)=>void}) {
+  const [selected,setSelected] = useState(value);
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild>
+      <Button type="button" className="recipient-multi-select" variant="outline" aria-label={label} title={selected}>
+        {selected ? <NotionChoicePill field={field} value={selected} /> : <span>—</span>}<ChevronDown />
+      </Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="start" className="recipient-choice-menu">
+      <DropdownMenuRadioGroup value={selected} onValueChange={next=>{setSelected(next);change(next);}}>
+        <DropdownMenuRadioItem value="">Clear value</DropdownMenuRadioItem>
+        {selected && !field.options.includes(selected) && <DropdownMenuRadioItem value={selected} disabled><NotionChoicePill field={field} value={selected} /></DropdownMenuRadioItem>}
+        {field.options.map(option=><DropdownMenuRadioItem key={option} value={option}><NotionChoicePill field={field} value={option} /></DropdownMenuRadioItem>)}
+      </DropdownMenuRadioGroup>
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
 function RecipientMultiSelect({field,label,value,change}: {field:NotionField;label:string;value:string;change:(value:string)=>void}) {
   const [selected, setSelected] = useState(() => choiceValues(value, field));
   const options = [...new Set([...field.options,...choiceValues(value,field)])];
   return <DropdownMenu>
     <DropdownMenuTrigger asChild>
       <Button type="button" className="recipient-multi-select" variant="outline" aria-label={label} title={selected.join(', ')}>
-        <span>{selected.join(', ') || '—'}</span><ChevronDown />
+        <span className="recipient-choice-selection">{selected.length ? selected.map(option=><NotionChoicePill key={option} field={field} value={option} />) : '—'}</span><ChevronDown />
       </Button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" className="recipient-choice-menu">
@@ -389,7 +406,7 @@ function RecipientMultiSelect({field,label,value,change}: {field:NotionField;lab
         const next = checked ? [...selected, option] : selected.filter(value=>value!==option);
         setSelected(next);
         change(next.join('; '));
-      }}>{option}</DropdownMenuCheckboxItem>)}
+      }}><NotionChoicePill field={field} value={option} /></DropdownMenuCheckboxItem>)}
     </DropdownMenuContent>
   </DropdownMenu>;
 }
@@ -416,7 +433,7 @@ function CampaignMenu() {
     <h1 className="campaign-heading-title"><DropdownMenuTrigger asChild><Button type="button" variant="outline" className="campaign-title-picker" aria-label={name} title={name}><span>{name}</span><ChevronDown data-icon="inline-end" /></Button></DropdownMenuTrigger></h1>
     <DropdownMenuContent align="start" className="campaign-menu">
       <DropdownMenuGroup className="campaign-menu-list">
-        {Object.keys(drafts).sort((a,b)=>a.localeCompare(b)).map(key=><div className="draft-menu-row" key={key}><DropdownMenuItem onSelect={()=>document.dispatchEvent(new CustomEvent('mailbot:select-draft',{detail:{name:key}}))}><span>{key}</span></DropdownMenuItem><Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete draft ${key}`} onClick={()=>setRemove(key)}><X /></Button></div>)}
+        {namesByLastSaved(drafts).map(key=><div className="draft-menu-row" key={key}><DropdownMenuItem onSelect={()=>document.dispatchEvent(new CustomEvent('mailbot:select-draft',{detail:{name:key}}))}><span>{key}</span></DropdownMenuItem><Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete draft ${key}`} onClick={()=>setRemove(key)}><X /></Button></div>)}
       </DropdownMenuGroup><DropdownMenuSeparator /><DropdownMenuGroup className="campaign-file-actions"><DropdownMenuItem onSelect={()=>document.getElementById('importDraftButton')?.click()}><FileUp />Import draft</DropdownMenuItem><DropdownMenuItem onSelect={()=>document.getElementById('exportDraftButton')?.click()}><FileDown />Export draft</DropdownMenuItem></DropdownMenuGroup>
     </DropdownMenuContent>
   </DropdownMenu></EditableTitle><AlertDialog open={!!remove} onOpenChange={open=>!open&&setRemove(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete this draft?</AlertDialogTitle><AlertDialogDescription>{remove}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={()=>{document.dispatchEvent(new CustomEvent('mailbot:delete-draft',{detail:{name:remove}}));setRemove(null);refresh();}}>Delete draft</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>;
@@ -424,12 +441,36 @@ function CampaignMenu() {
 
 function EditorToolbar() {
   return <>
-    <NativeSelect id="editorFont" aria-label="Font" defaultValue="Albert Sans"><NativeSelectOption value="Albert Sans">Albert Sans</NativeSelectOption><NativeSelectOption value="League Spartan">League Spartan</NativeSelectOption></NativeSelect>
-    <NativeSelect id="editorFontWeight" aria-label="Font weight" defaultValue="400">{[100,200,300,400,500,600,700,800,900].map((w,i)=><NativeSelectOption value={w} key={w}>{['Thin','Extra light','Light','Regular','Medium','Semibold','Bold','Extra bold','Black'][i]}</NativeSelectOption>)}</NativeSelect>
-    <div className="font-size-control"><Button type="button" id="editorSizeDown" variant="ghost" size="icon-sm" aria-label="Smaller text"><AArrowDown /></Button><Input id="editorFontSize" type="number" min="1" max="200" defaultValue="16" aria-label="Font size in pixels" /><Button type="button" id="editorSizeUp" variant="ghost" size="icon-sm" aria-label="Larger text"><AArrowUp /></Button></div>
-    <span className="toolbar-divider" />
-    <Button type="button" variant="ghost" size="icon-sm" data-format="bold" aria-label="Bold"><Bold /></Button><Button type="button" variant="ghost" size="icon-sm" data-format="italic" aria-label="Italic"><Italic /></Button><Button type="button" variant="ghost" size="sm" data-format="formatBlock" data-value="h2">Heading</Button><Button type="button" variant="ghost" size="sm" data-format="formatBlock" data-value="p">Text</Button><Button type="button" variant="ghost" size="icon-sm" data-format="insertUnorderedList" aria-label="Bulleted list"><List /></Button>
-    <span className="toolbar-divider" /><Button type="button" variant="ghost" size="icon-sm" id="insertLink" aria-label="Insert link"><Link /></Button><Button type="button" variant="ghost" size="sm" id="insertButton"><Plus data-icon="inline-start" />Button</Button><Button type="button" variant="ghost" size="icon-sm" id="insertDivider" aria-label="Insert divider"><Minus /></Button>
+    <NativeSelect className="editor-font-family" id="editorFont" aria-label="Font" defaultValue="Albert Sans">
+      <NativeSelectOption value="Albert Sans">Albert Sans</NativeSelectOption>
+      <NativeSelectOption value="League Spartan">League Spartan</NativeSelectOption>
+    </NativeSelect>
+    <NativeSelect className="editor-font-weight" id="editorFontWeight" aria-label="Font weight" defaultValue="400">
+      {['Thin','Extra light','Light','Regular','Medium','Semibold','Bold','Extra bold','Black'].map((label, index) =>
+        <NativeSelectOption value={(index + 1) * 100} key={label}>{label}</NativeSelectOption>)}
+    </NativeSelect>
+    <div className="editor-control-group" role="group" aria-label="Font size">
+      <Input id="editorFontSize" type="number" min="1" max="200" defaultValue="16" aria-label="Font size in pixels" />
+      <Button type="button" id="editorSizeDown" variant="outline" size="icon" aria-label="Smaller text" title="Smaller text">A</Button>
+      <Button type="button" id="editorSizeUp" variant="outline" size="icon" aria-label="Larger text" title="Larger text">A</Button>
+    </div>
+    <div className="editor-control-group" role="group" aria-label="Text formatting">
+      <Button type="button" variant="outline" size="icon" data-format="bold" aria-label="Bold" aria-pressed={false} title="Bold"><Bold /></Button>
+      <Button type="button" variant="outline" size="icon" data-format="italic" aria-label="Italic" aria-pressed={false} title="Italic"><Italic /></Button>
+      <Button type="button" variant="outline" size="icon" data-format="underline" aria-label="Underline" aria-pressed={false} title="Underline"><Underline /></Button>
+      <Button type="button" variant="outline" data-format="formatBlock" data-value="p" aria-pressed={false}>Body</Button>
+      <Button type="button" variant="outline" data-format="formatBlock" data-value="h2" aria-pressed={false}>Heading</Button>
+      <Button type="button" variant="outline" size="icon" data-format="insertUnorderedList" aria-label="Bulleted list" aria-pressed={false} title="Bulleted list"><List /></Button>
+    </div>
+    <div className="editor-control-group editor-insert-controls" role="group" aria-label="Insert content">
+      <Button type="button" variant="outline" size="icon" id="insertLink" aria-label="Insert link" title="Insert link"><Link /></Button>
+      <Button type="button" variant="outline" id="insertButton">Add Button</Button>
+      <Button type="button" variant="outline" id="insertDivider" title="Insert horizontal divider">Divider</Button>
+      <details className="variable-menu">
+        <summary>Insert Personalization<ChevronDown aria-hidden="true" /></summary>
+        <div id="editorVariables" className="variable-chips" />
+      </details>
+    </div>
   </>;
 }
 
@@ -463,7 +504,7 @@ for (const [id, component] of [
   ['campaignMenu', <CampaignMenu />], ['newCampaignAction', <Button id="newDraft" type="button" variant="outline"><Plus data-icon="inline-start" />New mail</Button>], ['recipientTable', <RecipientTable />], ['formatToolbar', <EditorToolbar />],
   ['campaignFlow', <CampaignFlow />], ['previewTools', <PreviewTools />],
   ['deliveryControls', <SendControls />], ['audienceMenu', <AudienceMenu />],
-  ['recipientTools', <RecipientTools />], ['audienceSummary', <AudienceSummary />],
+  ['recipientTools', <RecipientTools />], ['manualEditMarker', <ManualEditMarker />],
   ['newGroupAction', <Button id="newRecipientList" type="button" variant="outline"><Plus data-icon="inline-start" />New group</Button>],
   ['sendConfirmation', <SendConfirmation />],
 ] as const) {
@@ -472,3 +513,4 @@ for (const [id, component] of [
 }
 document.documentElement.dataset.studioReady = 'true';
 await import('/app.js');
+initStyledSelects();

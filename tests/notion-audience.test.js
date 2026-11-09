@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {applicationHistory,deriveProperties,eligibility,matchFilter,filterAudience,recipientSnapshot} from '../public/audience.js';
+import {applicationHistory,deriveProperties,eligibility,matchFilter,filterAudience,operators,recipientSnapshot} from '../public/audience.js';
 import {validateNotionRecipients,defaultSourceId} from '../server/notion-audience.js';
 const phase='Winter 2026';
 const contact=(id,properties={})=>({id,properties:deriveProperties({Name:'Alex Example','First name':'Alex','Last name':'Example',Email:`${id}@example.org`,'Subscription status':'Subscribed','Current member':false,...properties})});
+
+test('text and choice filters default to Is and test prefixes on individual selections',()=>{
+ for(const type of ['text','select','multi_select']) assert.deepEqual(operators[type].slice(0,5),['equals','not_equals','contains','not_contains','starts_with']);
+ assert.equal(matchFilter({Labels:['Demo','Newsletter']},{property:'Labels',operator:'starts_with',value:'news'}),true);
+});
 
 test('application history separates phases, completion and finalized marketing opt-ins',()=>{
  const h=applicationHistory({'Application state':'Summer 2026: completed; Winter 2026: partial','Source records':'Tally kd5oKM | old | completed | newsletter opt-in: yes\nTally 0QXpQA | new | partial | newsletter opt-in: yes'});
@@ -42,11 +47,14 @@ test('new typed contains filters match partial tags without changing older saved
  assert.equal(matchFilter(properties,contains),false);
  assert.equal(matchFilter(properties,{...contains,partialMatch:true}),true);
  assert.equal(matchFilter(properties,{...contains,operator:'not_contains',partialMatch:true}),false);
+ assert.equal(matchFilter(properties,{...contains,operator:'equals',value:'Demo Day'}),true);
+ assert.equal(matchFilter(properties,{...contains,operator:'equals',value:'Demo'}),false);
+ assert.equal(matchFilter(properties,{...contains,operator:'not_equals',value:'Demo Day'}),false);
 });
 
 test('recipient snapshots keep source field types and every allowed choice',()=>{
  const schema=[
-  {name:'Stage',type:'select',notionType:'status',options:['New','Ready']},
+  {name:'Stage',type:'select',notionType:'status',options:['New','Ready'],choices:[{name:'New',color:'gray'},{name:'Ready',color:'green'}]},
   {name:'Interests',type:'multi_select',notionType:'multi_select',options:['Luma','Tally']}
  ];
  const snapshot=recipientSnapshot([{id:'page',properties:{Stage:'New',Interests:['Luma']}}],['Stage','Interests'],schema);

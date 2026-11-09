@@ -1,4 +1,4 @@
-import { contactLists } from './contact-lists.js';
+import { contactLists, legacyTouchpointLabel, touchpointField, touchpointLabel } from './contact-lists.js';
 import { attachNotionFields } from './notion-fields.js';
 // Shared by the browser and server so saved audiences use the same rules.
 export const purposes = {
@@ -29,7 +29,20 @@ export function deriveProperties(properties) {
   const history = applicationHistory(properties);
   const result = { ...properties, 'Completed applications': history.complete,
     'Incomplete applications': history.partial, 'Marketing opt-in phases': history.optIns };
-  result.Lists = contactLists(result);
+  result['Application phases'] ??= [...new Set([...history.complete, ...history.partial])];
+  result['Luma check-in recorded'] ??= /\bchecked in: \d{4}-\d{2}-\d{2}T/.test(String(properties['Source records'] || ''));
+  result[touchpointField] = contactLists(result);
+  result.Origins ??= result[touchpointField].flatMap(tag => {
+    if (tag === 'Web signup') return ['Website'];
+    if (tag === 'Manual import') return ['Mailbot'];
+    if (tag === 'Luma') return [tag];
+    const match = legacyTouchpointLabel(tag).match(/^Application · (.+)$/);
+    return match ? [`${match[1]} application`] : [];
+  });
+  result['Newsletter opt-in recorded'] ??= history.optIns.length > 0
+    || /newsletter opt-in:\s*yes/i.test(String(properties['Source records'] || ''))
+    || ['Double opt-in', 'Imported opt-in'].includes(properties['Consent method']);
+  delete result.Lists;
   return result;
 }
 
@@ -54,10 +67,9 @@ export function memberCopyAllowed(contact, {purpose,memberCopies=[]} = {}) {
   return p['Email delivery status'] !== 'Suppressed' && purpose === 'reminder' && p['Current member'] === true && p['Subscription status'] !== 'Unsubscribed' && memberCopies.some(copy=>copy.notionPageId === contact.id && String(copy.email||'').trim().toLowerCase() === String(p.Email||'').trim().toLowerCase());
 }
 
+const textOperators = ['equals','not_equals','contains','not_contains','starts_with','ends_with','empty','not_empty'];
 export const operators = {
-  text: ['contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', 'empty', 'not_empty'],
-  select: ['equals', 'not_equals', 'contains', 'not_contains', 'empty', 'not_empty'],
-  multi_select: ['contains', 'not_contains', 'empty', 'not_empty'],
+  text: textOperators, select: textOperators, multi_select: textOperators,
   checkbox: ['equals'], number: ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'empty', 'not_empty'],
   date: ['on', 'before', 'after', 'on_or_before', 'on_or_after', 'empty', 'not_empty']
 };
@@ -75,26 +87,39 @@ export function matchFilter(properties, filter) {
     }
     return result;
   }
-  const actual = properties[filter.property];
+  const isTouchpoint = Object.hasOwn(properties, touchpointField) && [touchpointField, 'Lists'].includes(filter.property);
+  let actual = properties[isTouchpoint ? touchpointField : filter.property];
   const empty = actual == null || actual === '' || (Array.isArray(actual) && !actual.length);
   if (filter.operator === 'empty') return empty;
   if (filter.operator === 'not_empty') return !empty;
   if (typeof actual === 'boolean') return filter.operator === 'equals' && actual === (filter.value === true || filter.value === 'true');
   const a = String(actual ?? '').toLocaleLowerCase();
-  const b = String(filter.value ?? '').toLocaleLowerCase();
+  const query = String(filter.value ?? '');
+  const b = (isTouchpoint && !filter.partialMatch ? touchpointLabel(query) : query).toLocaleLowerCase();
+  // Older saved filters can still select a subscription status by its former tag.
+  const oldStatusTag = {Subscribed:'Opted in',Unsubscribed:'Unsubscribed','Pending confirmation':'Opt-in pending'}[properties['Subscription status']];
+  if (isTouchpoint && Array.isArray(actual) && oldStatusTag) actual = [...actual, oldStatusTag];
+  const anyValue = predicate => Array.isArray(actual)
+    ? actual.some(value=>predicate(String(value).toLocaleLowerCase()))
+    : predicate(a);
   const contains = () => Array.isArray(actual)
     ? actual.some(value => {
         const item = String(value).toLocaleLowerCase();
-        return filter.partialMatch ? item.includes(b) : item === b;
+        return filter.partialMatch
+          ? item.includes(b) || (isTouchpoint && legacyTouchpointLabel(value).toLocaleLowerCase().includes(b))
+          : item === b;
       })
     : a.includes(b);
+  const equals = () => Array.isArray(actual)
+    ? actual.some(item=>String(item).toLocaleLowerCase()===b)
+    : a===b;
   switch (filter.operator) {
     case 'contains': return contains();
     case 'not_contains': return !contains();
-    case 'equals': return a === b;
-    case 'not_equals': return a !== b;
-    case 'starts_with': return a.startsWith(b);
-    case 'ends_with': return a.endsWith(b);
+    case 'equals': return equals();
+    case 'not_equals': return !equals();
+    case 'starts_with': return anyValue(value=>value.startsWith(b));
+    case 'ends_with': return anyValue(value=>value.endsWith(b));
     case 'on': return !empty && a.slice(0,10) === b.slice(0,10);
     case 'on_or_before': return !empty && a.slice(0,10) <= b.slice(0,10);
     case 'on_or_after': return !empty && a.slice(0,10) >= b.slice(0,10);
@@ -126,8 +151,8 @@ export function filterAudience(contacts, { purpose = 'browse', phase, filter, se
 }
 
 export function recipientSnapshot(contacts, fields, schema = []) {
-  const canonical = { Name: 'name', 'First name': 'firstName', 'Last name': 'lastName', Email: 'email', 'Marketing opt-in phases': 'marketingOptInPhases', 'Newsletter opt-in recorded': 'newsletterOptInRecorded', 'Luma check-in recorded': 'lumaCheckInRecorded' };
-  const selected = [...new Set(['Name', 'First name', 'Last name', 'Email', ...fields])];
+  const canonical = { Name: 'name', 'First name': 'firstName', 'Last name': 'lastName', Email: 'email', [touchpointField]: 'lists', 'Marketing opt-in phases': 'marketingOptInPhases', 'Newsletter opt-in recorded': 'newsletterOptInRecorded', 'Luma check-in recorded': 'lumaCheckInRecorded' };
+  const selected = [...new Set(['Name', 'First name', 'Last name', 'Email', ...fields.map(name => name === 'Lists' ? touchpointField : name)])];
   const used = new Set(['notionPageId']);
   const columns = selected.map((label, index) => {
     const words = label.normalize('NFKD').replace(/[^a-zA-Z0-9 ]/g, '').trim().split(/\s+/);

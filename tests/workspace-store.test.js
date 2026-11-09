@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { workspaceStore } from '../server/workspace-store.js';
+import { namesByLastSaved } from '../public/workspace-store.js';
 import { eligibility } from '../public/audience.js';
 
 test('named lists and drafts survive reopening the disk store, including renames and deletions', async () => {
@@ -60,4 +61,16 @@ test('browser migration restores disk lists and preserves edits after a failed d
     assert.deepEqual(disk.lists, {});
     assert.equal(memory.get('lists.disk-dirty'), undefined);
   } finally { globalThis.fetch = oldFetch; globalThis.localStorage = oldStorage; }
+});
+
+test('saved draft and group menus order timestamps newest first with alphabetical ties and older undated entries last', () => {
+  const items = {
+    'A older': { savedAt: '2026-11-09T10:30:00+02:00' },
+    'Z latest': { savedAt: '2026-11-09T09:00:00Z' },
+    'B same time': { savedAt: '2026-11-09T10:00:00+01:00' },
+    'C invalid date': { savedAt: 'invalid' },
+    'D old record': {}
+  };
+  assert.deepEqual(namesByLastSaved(items), ['B same time', 'Z latest', 'A older', 'C invalid date', 'D old record']);
+  assert.deepEqual(namesByLastSaved({}), []);
 });

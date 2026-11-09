@@ -1,3 +1,10 @@
+export function namesByLastSaved(collection) {
+  return Object.entries(collection)
+    .map(([name, item]) => ({ name, time: Date.parse(item?.savedAt) || 0 }))
+    .sort((left, right) => right.time - left.time || left.name.localeCompare(right.name, 'en'))
+    .map(({ name }) => name);
+}
+
 let pending = Promise.resolve();
 let storageKeys = {};
 const versions = {};

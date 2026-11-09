@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {viewSettings,activeViewFilter,namedViews,audienceSummary} from '../public/recipient-views.js';
+import {viewSettings,activeViewFilter,notionSelectionPurpose} from '../public/recipient-views.js';
 import {filterAudience} from '../public/audience.js';
 test('opening the database starts with every contact regardless of campaign purpose',()=>{
  const contacts=[{id:'a',properties:{Name:'A',Email:'a@example.org','Subscription status':'Subscribed'}},{id:'b',properties:{Name:'B',Email:'b@example.org','Subscription status':'Not subscribed','Current member':true}}];
@@ -8,14 +8,11 @@ test('opening the database starts with every contact regardless of campaign purp
  assert.equal(filterAudience(contacts,{...settings,purpose:'browse'}).contacts.length,2);
  assert.equal(settings.purpose,undefined);
 });
-test('named list dropdown only uses locally saved list names, not Notion tags',()=>{
- assert.deepEqual(namedViews({'Recruiting list':{recipients:[]},'Event follow-up':{recipients:[]}}),['Event follow-up','Recruiting list']);
-});
 test('legacy saved filters survive opening as a database view without implicit purpose filtering',()=>{
  const source={purpose:'reminder',phase:'Winter 2026',list:'Winter 2026 · Started',filter:{match:'all',rules:[]},limit:50};
  const view=viewSettings(source);
  assert.equal(view.purpose,undefined);assert.equal(view.limit,50);
- assert.deepEqual(view.filter.rules[1],{property:'Lists',operator:'contains',value:'Winter 2026 · Started'});
+ assert.deepEqual(view.filter.rules[1],{property:'Touchpoints',operator:'contains',value:'Winter 26 · Started'});
  view.filter.rules[0].rules.push({property:'Email',operator:'contains',value:'test'});
  assert.equal(source.filter.rules.length,0);
 });
@@ -45,12 +42,11 @@ test('empty filter groups are ignored instead of broadening OR conditions',()=>{
  assert.equal(activeViewFilter({rules:[]}),null);
 });
 
-test('summary shows the main filter and condenses individual exclusions into Customized',()=>{
- const source={sourceId:'contacts',purpose:'newsletter',filter:{match:'all',rules:[
-  {property:'Lists',operator:'contains',value:'Demo Day'},
-  ...Array.from({length:12},(_,i)=>({property:'Email',operator:'not_equals',value:`person${i}@example.invalid`}))
- ]}};
- assert.deepEqual(audienceSummary(source,null,false),{
-  origin:'Notion',chips:['Newsletter subscribers','Lists contains Demo Day'],customized:true
- });
+test('direct Notion selection preserves sending eligibility and defaults to newsletter opt-in',()=>{
+ for (const purpose of ['recruiting','reminder','deadline','newsletter']) {
+  assert.equal(notionSelectionPurpose(purpose), purpose);
+ }
+ for (const purpose of [undefined,'browse','unknown']) {
+  assert.equal(notionSelectionPurpose(purpose), 'newsletter');
+ }
 });

@@ -1,6 +1,8 @@
 import { notionRequest, queryNotionSource, notionPropertyValue } from './notion-cli.js';
 import { deriveProperties, eligibility, memberCopyAllowed } from '../public/audience.js';
 
+import { touchpointField, touchpointLabel } from '../public/contact-lists.js';
+
 export const defaultSourceId = 'ee78a5b5-8a15-48e5-b5fd-16f821e57d1c';
 export const defaultDatabaseId = '8312015036a44b90be22b9b05cd1b9df';
 export function notionConfig() {
@@ -23,9 +25,16 @@ export async function loadNotionFields() {
   const config = notionConfig();
   if (!config.configured) throw new Error('Notion is not configured. Add NOTION_API_KEY to the local .env file and restart Mailbot.');
   const schema = await notionRequest(`/data_sources/${encodeURIComponent(config.sourceId)}`);
-  return Object.entries(schema.properties).map(([name,p]) => ({ name, notionType:p.type,
-    type: ['title','rich_text','email','url','phone_number'].includes(p.type) ? 'text' : ['created_time','last_edited_time'].includes(p.type) ? 'date' : p.type === 'status' ? 'select' : ['select','multi_select','checkbox','number','date'].includes(p.type) ? p.type : 'text',
-    options: (p[p.type]?.options || []).map(o => o.name) }));
+  return Object.entries(schema.properties).map(([name,p]) => {
+    if (name === 'Lists' && !schema.properties[touchpointField]) name = touchpointField;
+    const choices = p[p.type]?.options?.map(option=>({name:name === touchpointField ? touchpointLabel(option.name) : option.name,color:option.color}));
+    return {
+      name, notionType:p.type,
+      type:['created_time','last_edited_time'].includes(p.type) ? 'date' : p.type === 'status' ? 'select' : ['select','multi_select','checkbox','number','date'].includes(p.type) ? p.type : 'text',
+      options:choices?.map(choice=>choice.name) || [],
+      ...(choices ? {choices} : {})
+    };
+  });
 }
 
 export async function loadNotionAudience() {
@@ -33,7 +42,7 @@ export async function loadNotionAudience() {
   const fields = await loadNotionFields();
   const pages = await queryNotionSource(config.sourceId);
   const contacts = pages.filter(p => !p.archived && !p.in_trash).map(contactFromPage);
-  for (const name of ['Completed applications','Incomplete applications','Marketing opt-in phases','Lists']) {
+  for (const name of ['Completed applications','Incomplete applications','Marketing opt-in phases',touchpointField]) {
     const options = [...new Set(contacts.flatMap(c => c.properties[name]))].sort();
     const field = fields.find(f => f.name === name);
     if (field) field.options = [...new Set([...field.options, ...options])];
