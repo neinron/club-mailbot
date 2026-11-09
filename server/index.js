@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { sendViaGmailSmtp, testGmailSmtpAuth } from "./smtp.js";
 import { loadLocalEnv } from "./env.js";
 import { createUnsubscribeToken } from "./unsubscribe.js";
-import { notionConfig, loadNotionAudience, validateNotionRecipients } from './notion-audience.js';
+import { notionConfig, loadNotionAudience, loadNotionFields, validateNotionRecipients } from './notion-audience.js';
 import { workspaceStore } from './workspace-store.js';
 import { deliveryRecorder } from './delivery-audit.js';
 import { notionRequest, queryNotionSource } from './notion-cli.js';
@@ -442,6 +442,10 @@ async function handleSend(req, res) {
     const payload = await readJson(req);
     const recipients = sanitizeRecipients(payload.recipients);
     const recipientColumns = sanitizeRecipientColumns(payload.recipientColumns);
+    const replyTo = String(payload.replyTo || "").trim();
+    if (replyTo && (!emailPattern.test(replyTo) || /[<>,;:"\\]/.test(replyTo))) {
+      return sendJson(res, 400, { error: "Enter a valid Reply-To email address." });
+    }
     const delayMs = Math.min(Math.max(Number(payload.delayMs) || 1200, 1200), 10000);
     const authSecret = String(payload.authSecret || payload.appPassword || credentialSession.get(payload.accountEmail, payload.authMode) || "");
     const authMode = payload.authMode === "xoauth2" ? "xoauth2" : "appPassword";
@@ -569,7 +573,7 @@ async function handleSend(req, res) {
           to: addresses.to,
           cc: addresses.cc,
           bcc: addresses.bcc,
-          replyTo: addresses.replyTo,
+          replyTo: replyTo ? [replyTo] : addresses.replyTo,
           subject,
           body: plainBody,
           htmlBody
@@ -690,6 +694,11 @@ createServer((req, res) => {
   }
   if (req.method === 'GET' && req.url === '/api/send/status') return sendJson(res, 200, handleSend.progress || {state:'idle'});
   if (req.method === 'GET' && req.url === '/api/notion/status') return sendJson(res, 200, notionConfig());
+  if (req.method === 'GET' && req.url === '/api/notion/fields') {
+    loadNotionFields().then(fields => sendJson(res, 200, {sourceId:notionConfig().sourceId, fields}))
+      .catch(() => sendJson(res, 503, {error:'Could not load the configured Notion field types.'}));
+    return;
+  }
   if (req.method === 'GET' && req.url === '/api/workspace') {
     workspace.read().then(data => sendJson(res, 200, data)).catch(() => sendJson(res, 500, { error: 'Could not read saved workspace.' }));
     return;

@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { ArrowRight, ChevronDown, Database, FileUp, FileDown, Mail, Send, Plus, X, Pencil, Info, Trash2, Bold, Italic, List, Link, Minus, AArrowDown, AArrowUp } from 'lucide-react';
+import { ArrowRight, ChevronDown, Database, FileUp, FileDown, Mail, Send, Plus, X, Pencil, Info, Trash2, Bold, Italic, List, Link, Minus, AArrowDown, AArrowUp, Ellipsis, ExternalLink, RefreshCw, Save, ListFilter } from 'lucide-react';
+import { audienceSummary } from '../public/recipient-views.js';
+import { choiceValues } from '../public/notion-fields.js';
 import { Button } from '@/ui/components/ui/button';
 import { Badge } from '@/ui/components/ui/badge';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, CardAction } from '@/ui/components/ui/card';
@@ -10,7 +12,7 @@ import { Input } from '@/ui/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/ui/components/ui/native-select';
 import { ToggleGroup, ToggleGroupItem } from '@/ui/components/ui/toggle-group';
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from '@/ui/components/ui/alert-dialog';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuSeparator } from '@/ui/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@/ui/components/ui/dropdown-menu';
 
 // These roots own only the new controls. The existing editor and audience engine
 // keep their DOM and data ownership, so saved campaigns do not need migration.
@@ -102,10 +104,55 @@ function SendControls() {
   </>;
 }
 
+function EditableTitle({name, kind, editable = true, children}: {
+  name: string; kind: 'group' | 'mail'; editable?: boolean; children: React.ReactNode;
+}) {
+  const [editing, setEditing] = useState(false);
+  const pencil = useRef<HTMLButtonElement>(null);
+  return <div className="title-controls">
+    <div className="title-field">
+      <div className={editing ? 'invisible' : undefined}>{children}</div>
+      {editing && <Input
+      key={name}
+      autoFocus
+      className={`title-name-input ${kind === 'mail' ? 'campaign-title-picker' : 'list-title-picker'}`}
+      aria-label={`${kind === 'mail' ? 'Mail' : 'Group'} title`}
+      defaultValue={name}
+      onFocus={event => event.currentTarget.select()}
+      onBlur={event => {
+        setEditing(false);
+        const title = event.currentTarget.value.trim();
+        if (title && title !== name) document.dispatchEvent(new CustomEvent(
+          kind === 'mail' ? 'mailbot:rename-draft' : 'mailbot:rename-group',
+          {detail:{name:title}}
+        ));
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Escape') event.currentTarget.value = name;
+        if (event.key === 'Enter' || event.key === 'Escape') {
+          event.preventDefault();
+          event.currentTarget.blur();
+          requestAnimationFrame(() => pencil.current?.focus());
+        }
+      }}
+      />}
+    </div>
+    <Button ref={pencil} type="button" variant="outline" size="icon" className="title-edit-button" aria-label={`Rename ${kind}`} title={`Rename ${kind}`} disabled={!editable || editing} onClick={() => setEditing(true)}><Pencil /></Button>
+  </div>;
+}
+
 function AudienceMenu() {
-  const [title, setTitle] = useState('Choose a list');
-  const [canRefresh,setCanRefresh] = useState(false);
-  useEffect(() => { const sync = (event: Event) => { const detail=(event as CustomEvent).detail;setTitle(detail.tableName || 'Choose a list');setCanRefresh(!!detail.canRefresh); }; document.addEventListener('mailbot:campaign-state', sync); return () => document.removeEventListener('mailbot:campaign-state', sync); }, []);
+  const [title, setTitle] = useState('Choose a group');
+  const [hasAudience, setHasAudience] = useState(false);
+  useEffect(() => {
+    const sync = (event: Event) => {
+      const {tableName, hasAudience} = (event as CustomEvent).detail;
+      setTitle(tableName);
+      setHasAudience(hasAudience);
+    };
+    document.addEventListener('mailbot:campaign-state', sync);
+    return () => document.removeEventListener('mailbot:campaign-state', sync);
+  }, []);
   const [lists, setLists] = useState<Record<string, { recipients: unknown[] }>>({});
   const refresh = () => {
     try { setLists(JSON.parse(localStorage.getItem('club-mailbot.tables.v1') || '{}')); } catch { setLists({}); }
@@ -116,9 +163,9 @@ function AudienceMenu() {
     return () => document.removeEventListener('mailbot:lists-changed', refresh);
   }, []);
   const source = (source: string) => setTimeout(() => document.dispatchEvent(new CustomEvent('mailbot:open-audience', { detail: { source } })), 0);
-  return <DropdownMenu onOpenChange={open => open && refresh()}>
-    <DropdownMenuTrigger asChild><Button id="changeRecipients" className="list-title-picker" variant="ghost" type="button" aria-label={title} title={title}><span>{title}</span><ChevronDown data-icon="inline-end" /></Button></DropdownMenuTrigger>
-    <DropdownMenuContent align="end" className="audience-menu">
+  return <EditableTitle name={title} kind="group" editable={hasAudience}><DropdownMenu onOpenChange={open => open && refresh()}>
+    <DropdownMenuTrigger asChild><Button id="changeRecipients" className="list-title-picker" variant="outline" type="button" aria-label={title} title={title}><span>{title}</span><ChevronDown data-icon="inline-end" /></Button></DropdownMenuTrigger>
+    <DropdownMenuContent align="start" className="audience-menu">
       <DropdownMenuGroup className="audience-menu-lists">
         {Object.entries(lists).sort(([a], [b]) => a.localeCompare(b)).map(([name, list]) =>
           <DropdownMenuItem key={name} onSelect={() => document.dispatchEvent(new CustomEvent('mailbot:use-saved-list', { detail: { name } }))}>
@@ -127,63 +174,252 @@ function AudienceMenu() {
       </DropdownMenuGroup>
       {Object.keys(lists).length > 0 && <DropdownMenuSeparator />}
       <DropdownMenuGroup>
-        {canRefresh && <DropdownMenuItem onSelect={()=>document.getElementById('refreshAudience')?.click()}><Database />Refresh from Notion</DropdownMenuItem>}
         <DropdownMenuItem onSelect={() => source('notion')}><Database />Browse Notion contacts</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => source('csv')}><FileUp />Import CSV or paste</DropdownMenuItem>
       </DropdownMenuGroup>
     </DropdownMenuContent>
-  </DropdownMenu>;
+  </DropdownMenu></EditableTitle>;
 }
 
 function RecipientTools() {
+  const [canRefresh, setCanRefresh] = useState(false);
+  const [customized, setCustomized] = useState(false);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    const sync = (event: Event) => {
+      const {canRefresh, audienceDetails} = (event as CustomEvent).detail;
+      setCanRefresh(canRefresh);
+      setCustomized(Boolean(audienceDetails?.customized));
+    };
+    const syncRefresh = (event: Event) => setRefreshing((event as CustomEvent).detail);
+    document.addEventListener('mailbot:campaign-state', sync);
+    document.addEventListener('mailbot:refreshing-audience', syncRefresh);
+    return () => {
+      document.removeEventListener('mailbot:campaign-state', sync);
+      document.removeEventListener('mailbot:refreshing-audience', syncRefresh);
+    };
+  }, []);
+  const refresh = () => document.dispatchEvent(new CustomEvent('mailbot:refresh-audience'));
   return <div className="recipient-actions">
-    <Button id="newRecipientList" type="button" variant="ghost"><Plus data-icon="inline-start" />New list</Button>
-    <Button id="openSaveList" type="button" variant="outline">Save list</Button>
-    <Button id="clearButton" type="button" variant="ghost" size="icon-sm" aria-label="Clear current list" title="Clear current list"><Trash2 /></Button>
+    <Button id="openSaveList" type="button" variant="outline" size="icon" aria-label="Save group" title="Save group"><Save /></Button>
+    <Button type="button" variant="outline" size="icon" aria-label="Refresh from Notion" title={canRefresh ? 'Refresh from Notion' : 'This group has no saved Notion filters'} disabled={!canRefresh || refreshing} onClick={() => customized ? setConfirmRefresh(true) : refresh()}><RefreshCw className={refreshing ? 'animate-spin' : ''} /></Button>
+    <Button id="clearButton" type="button" variant="outline" size="icon" aria-label="Clear current group" title="Clear current group"><Trash2 /></Button>
+    <AlertDialog open={confirmRefresh} onOpenChange={setConfirmRefresh}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>Refresh this group from Notion?</AlertDialogTitle><AlertDialogDescription>Refreshing reapplies the saved filters and replaces your local table changes.</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={refresh}>Refresh group</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </div>;
 }
 
-type Column = {key:string; label:string; role:string};
+function AudienceSummary() {
+  const [summary, setSummary] = useState<ReturnType<typeof audienceSummary> | null>(null);
+  useEffect(() => {
+    const sync = (event: Event) => {
+      const {hasAudience, audienceSource, audienceDetails, hasApplicationPages} = (event as CustomEvent).detail;
+      setSummary(hasAudience ? audienceSummary(audienceSource, audienceDetails, hasApplicationPages) : null);
+    };
+    document.addEventListener('mailbot:campaign-state', sync);
+    return () => document.removeEventListener('mailbot:campaign-state', sync);
+  }, []);
+  if (!summary) return null;
+  return <div className="group-criteria" aria-label="How this group was selected">
+    <span className="audience-origin"><ListFilter aria-hidden="true" />{summary.origin}</span>
+    {summary.chips.map((label, index) => <Badge key={index} variant="outline" title={label}>{label}</Badge>)}
+    {summary.customized && <Badge variant="secondary" title="Individual selections or local table changes">Customized</Badge>}
+  </div>;
+}
+
+type NotionField = {name:string; type:string; notionType?:string; options:string[]};
+type Column = { key: string; label: string; role: string; readOnly?: boolean; notion?:NotionField };
+
+function notionPageHref(value = '') {
+  const target = value.trim();
+  if (/^[a-f0-9]{32}$|^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(target)) {
+    return 'https://app.notion.com/p/' + target.replaceAll('-', '');
+  }
+  try {
+    const url = new URL(target);
+    if (url.protocol === 'https:' && ['app.notion.com', 'notion.so', 'www.notion.so'].includes(url.hostname) && !url.username && !url.password) {
+      return url.href;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function RecipientTable() {
-  const [data, setData] = useState<{columns:Column[];rows:Record<string,string>[];canAdd:boolean}>({columns:[{key:"name",label:"Name",role:"text"},{key:"email",label:"Email",role:"to"}],rows:[],canAdd:true});
+  const [data, setData] = useState<{columns:Column[];rows:Record<string,string>[];canAdd:boolean}>({
+    columns: [{key:'name',label:'Name',role:'text'}, {key:'email',label:'Email',role:'to'}],
+    rows: [],
+    canAdd: true,
+  });
   const [editing, setEditing] = useState<string|null>(null);
   const [adding, setAdding] = useState(false);
+  const renaming = useRef(false);
+  const [dragging, setDragging] = useState<string|null>(null);
+  const [dropTarget, setDropTarget] = useState<string|null>(null);
   useEffect(() => {
-    const update = (e:Event) => setData((e as CustomEvent).detail);
-    document.addEventListener('mailbot:recipient-table',update);
-    return () => document.removeEventListener('mailbot:recipient-table',update);
-  },[]);
-  const addColumn = (value:string) => { if(value.trim()) document.dispatchEvent(new CustomEvent('mailbot:add-column',{detail:{label:value}})); setAdding(false); };
+    const update = (event: Event) => setData((event as CustomEvent).detail);
+    document.addEventListener('mailbot:recipient-table', update);
+    return () => document.removeEventListener('mailbot:recipient-table', update);
+  }, []);
+
+  function moveColumn(from: string, to: string) {
+    document.dispatchEvent(new CustomEvent('mailbot:move-column', {detail:{from,to}}));
+  }
+  function endDrag() {
+    setDragging(null);
+    setDropTarget(null);
+  }
+
   return <div className="table-wrap recipient-grid" tabIndex={0} aria-label="Recipient table"><table>
-    <thead id="recipientHead"><tr>{data.columns.map((column,index)=><th key={column.key}>
-      <div className="column-heading">{editing===column.key
-        ? <Input autoFocus defaultValue={column.label} aria-label={`Column name ${column.label}`} onBlur={event=>{document.dispatchEvent(new CustomEvent('mailbot:rename-column',{detail:{index,label:event.target.value}}));setEditing(null);}} onKeyDown={event=>{if(event.key==='Enter')event.currentTarget.blur();if(event.key==='Escape') {event.currentTarget.value=column.label;event.currentTarget.blur();}}} />
-        : <><span>{column.label}</span><Button type="button" variant="ghost" size="icon-sm" aria-label={`Rename ${column.label} column`} onClick={()=>setEditing(column.key)}><Pencil /></Button></>}
-        <Button type="button" variant="ghost" size="icon-sm" data-delete-column={index} aria-label={`Delete ${column.label} column`}><X /></Button>
+    <thead id="recipientHead"><tr>{data.columns.map((column,index) => <th
+      key={column.key}
+      scope="col"
+      draggable={editing !== column.key}
+      data-dragging={dragging === column.key || undefined}
+      data-drop-side={dropTarget === column.key ? (data.columns.findIndex(item => item.key === dragging) < index ? 'after' : 'before') : undefined}
+      onDragStart={event => {
+        if ((event.target as HTMLElement).closest('button, input')) { event.preventDefault(); return; }
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', column.key);
+        setDragging(column.key);
+      }}
+      onDragOver={event => {
+        if (!dragging) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setDropTarget(dragging === column.key ? null : column.key);
+      }}
+      onDrop={event => {
+        if (!dragging) return;
+        event.preventDefault();
+        moveColumn(dragging, column.key);
+        endDrag();
+      }}
+      onDragEnd={endDrag}
+    >
+      <div className="column-heading">
+        {editing === column.key
+          ? <Input
+              autoFocus
+              className="column-name-input"
+              defaultValue={column.label}
+              aria-label={`Column name ${column.label}`}
+              onBlur={event => {
+                document.dispatchEvent(new CustomEvent('mailbot:rename-column', {detail:{index,label:event.target.value}}));
+                setEditing(null);
+              }}
+              onKeyDown={event => {
+                if (event.key === 'Escape') event.currentTarget.value = column.label;
+                if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+              }}
+            />
+          : <>
+              <span>{column.label}</span>
+              {!column.readOnly && <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" className="column-menu-trigger" variant="ghost" size="icon-sm" aria-label={`Options for ${column.label}`}><Ellipsis /></Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onCloseAutoFocus={event => {
+                  if (renaming.current) { event.preventDefault(); renaming.current = false; }
+                }}>
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem onSelect={() => { renaming.current = true; setEditing(column.key); }}><Pencil />Rename</DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" onSelect={() => document.dispatchEvent(new CustomEvent('mailbot:delete-column', {detail:{index}}))}><X />Delete</DropdownMenuItem>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>}
+            </>}
       </div>
-    </th>)}<th className="grid-tools-column">{adding?<Input autoFocus placeholder="Column name" aria-label="New column name" onBlur={e=>addColumn(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();if(e.key==='Escape'){e.currentTarget.value='';e.currentTarget.blur();}}} />:<Button variant="ghost" size="icon-sm" type="button" aria-label="Add column" onClick={()=>setAdding(true)}><Plus /></Button>}</th></tr></thead>
+    </th>)}<th className="grid-tools-column">{adding
+      ? <Input autoFocus className="column-name-input" placeholder="Column name" aria-label="New column name" onBlur={event => {
+          const label = event.target.value.trim();
+          if (label) document.dispatchEvent(new CustomEvent('mailbot:add-column',{detail:{label}}));
+          setAdding(false);
+        }} onKeyDown={event => {
+          if (event.key === 'Escape') event.currentTarget.value = '';
+          if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+        }} />
+      : <Button variant="ghost" size="icon-sm" type="button" aria-label="Add column" onClick={() => setAdding(true)}><Plus /></Button>}
+    </th></tr></thead>
     <tbody id="recipientRows"><tr className="add-person-row">{data.columns.map((column,index)=><td key={column.key}>{index===0?<Button id="gridAddPerson" type="button" variant="ghost" size="icon-sm" aria-label="Add person" onClick={()=>document.dispatchEvent(new CustomEvent('mailbot:add-person'))} disabled={!data.canAdd} title={data.canAdd?'Add a person':'Add contacts in Notion, then refresh this list.'}><Plus /></Button>:<span className="cell-placeholder" />}</td>)}<td /></tr>
-      {data.rows.map((row,index)=><tr key={index}>{data.columns.map(column=><td key={column.key}><Input key={row[column.key]+':'+column.key} defaultValue={row[column.key] || ''} data-row-index={index} data-column-key={column.key} aria-label={`${column.label}, row ${index+1}`} /></td>)}<td className="row-tools"><Button type="button" variant="ghost" size="icon-sm" data-contact-details={index} aria-label={`Details for ${row.name || row.email || 'person'}`}><Info /></Button><Button type="button" variant="ghost" size="icon-sm" data-remove-row={index} aria-label={`Remove ${row.name || row.email || 'person'}`}><X /></Button></td></tr>)}
+      {data.rows.map((row,index)=><tr key={index}>{data.columns.map(column=><td key={column.key}><RecipientCell key={row[column.key]} column={column} index={index} value={row[column.key] ?? ''} /></td>)}<td className="row-tools"><Button type="button" variant="ghost" size="icon-sm" data-contact-details={index} aria-label={`Details for ${row.name || row.email || 'person'}`}><Info /></Button><Button type="button" variant="ghost" size="icon-sm" data-remove-row={index} aria-label={`Remove ${row.name || row.email || 'person'}`}><X /></Button></td></tr>)}
     </tbody></table></div>;
+}
+
+function RecipientCell({column, index, value}: {column:Column; index:number; value:string}) {
+  const label = `${column.label}, row ${index+1}`;
+  const field = column.notion;
+  const change = (value:string) => document.dispatchEvent(new CustomEvent('mailbot:recipient-cell',{detail:{index,key:column.key,value}}));
+  if (column.readOnly) return <NotionPageLink value={value} />;
+  if (field?.type === 'multi_select') {
+    return <RecipientMultiSelect field={field} label={label} value={value} change={change} />;
+  }
+  if (field && ['select','status'].includes(field.type)) {
+    return <NativeSelect className="recipient-select" aria-label={label} defaultValue={value} onChange={event=>change(event.currentTarget.value)}>
+      <NativeSelectOption value="">—</NativeSelectOption>
+      {value && !field.options.includes(value) && <NativeSelectOption value={value} disabled>{value}</NativeSelectOption>}
+      {field.options.map(option=><NativeSelectOption key={option} value={option}>{option}</NativeSelectOption>)}
+    </NativeSelect>;
+  }
+  if (field?.type === 'checkbox') {
+    return <input type="checkbox" aria-label={label} defaultChecked={value === 'true'} onChange={event=>change(String(event.currentTarget.checked))} />;
+  }
+  const type = field?.type === 'number' && (!value || Number.isFinite(Number(value))) ? 'number'
+    : field?.notionType === 'date' && (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) ? 'date' : 'text';
+  return <Input type={type} step={type === 'number' ? 'any' : undefined} defaultValue={value} data-row-index={index} data-column-key={column.key} aria-label={label} />;
+}
+
+function RecipientMultiSelect({field,label,value,change}: {field:NotionField;label:string;value:string;change:(value:string)=>void}) {
+  const [selected, setSelected] = useState(() => choiceValues(value, field));
+  const options = [...new Set([...field.options,...choiceValues(value,field)])];
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild>
+      <Button type="button" className="recipient-multi-select" variant="outline" aria-label={label} title={selected.join(', ')}>
+        <span>{selected.join(', ') || '—'}</span><ChevronDown />
+      </Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="start" className="recipient-choice-menu">
+      {options.map(option=><DropdownMenuCheckboxItem key={option} checked={selected.includes(option)} onSelect={event=>event.preventDefault()} onCheckedChange={checked=>{
+        const next = checked ? [...selected, option] : selected.filter(value=>value!==option);
+        setSelected(next);
+        change(next.join('; '));
+      }}>{option}</DropdownMenuCheckboxItem>)}
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
+function NotionPageLink({value}: {value?: string}) {
+  const href = notionPageHref(value);
+  return href ? <a className="notion-page-link" href={href} target="_blank" rel="noreferrer">Open page <ExternalLink aria-hidden="true" /></a> : <span className="muted">—</span>;
+}
+
+function MessageSenderFields() {
+  return <FieldGroup className="message-sender-fields">
+    <Field><FieldLabel htmlFor="fromName">Sender name</FieldLabel><Input id="fromName" defaultValue="Social AI Club" /></Field>
+    <Field><FieldLabel htmlFor="replyTo">Reply-to email</FieldLabel><Input id="replyTo" type="email" placeholder="Optional" /></Field>
+  </FieldGroup>;
 }
 
 function CampaignMenu() {
   const [name,setName]=useState('Choose a mail');
   const [drafts,setDrafts]=useState<Record<string,unknown>>({});
-  const [title,setTitle]=useState('');
   const [remove,setRemove]=useState<string|null>(null);
   const refresh=()=>{try{setDrafts(JSON.parse(localStorage.getItem('club-mailbot.drafts.v1') || '{}'));}catch{setDrafts({});}};
-  useEffect(()=>{const update=(event:Event)=>{const current=(event as CustomEvent).detail.draftName;setName(current);setTitle(current);};document.addEventListener('mailbot:campaign-state',update);return()=>document.removeEventListener('mailbot:campaign-state',update);},[]);
-  const rename=()=>{if(title.trim()&&title.trim()!==name){document.dispatchEvent(new CustomEvent('mailbot:rename-draft',{detail:{name:title.trim()}}));refresh();}};
-  return <><DropdownMenu onOpenChange={open=>{if(open){refresh();setTitle(name);}}}>
-    <h1 className="campaign-heading-title"><DropdownMenuTrigger asChild><Button type="button" variant="ghost" className="campaign-title-picker" aria-label={name} title={name}><span>{name}</span><ChevronDown data-icon="inline-end" /></Button></DropdownMenuTrigger></h1>
+  useEffect(()=>{const update=(event:Event)=>setName((event as CustomEvent).detail.draftName);document.addEventListener('mailbot:campaign-state',update);return()=>document.removeEventListener('mailbot:campaign-state',update);},[]);
+  return <><EditableTitle name={name} kind="mail"><DropdownMenu onOpenChange={open=>open&&refresh()}>
+    <h1 className="campaign-heading-title"><DropdownMenuTrigger asChild><Button type="button" variant="outline" className="campaign-title-picker" aria-label={name} title={name}><span>{name}</span><ChevronDown data-icon="inline-end" /></Button></DropdownMenuTrigger></h1>
     <DropdownMenuContent align="start" className="campaign-menu">
-      <Field className="picker-name-field"><FieldLabel htmlFor="renameMail">Mail title</FieldLabel><Input id="renameMail" value={title} onChange={e=>setTitle(e.target.value)} onBlur={rename} onKeyDown={e=>{e.stopPropagation();if(e.key==='Enter'){rename();e.currentTarget.blur();}}} /></Field>
-      <DropdownMenuSeparator /><DropdownMenuGroup className="campaign-menu-list">
+      <DropdownMenuGroup className="campaign-menu-list">
         {Object.keys(drafts).sort((a,b)=>a.localeCompare(b)).map(key=><div className="draft-menu-row" key={key}><DropdownMenuItem onSelect={()=>document.dispatchEvent(new CustomEvent('mailbot:select-draft',{detail:{name:key}}))}><span>{key}</span></DropdownMenuItem><Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete draft ${key}`} onClick={()=>setRemove(key)}><X /></Button></div>)}
       </DropdownMenuGroup><DropdownMenuSeparator /><DropdownMenuGroup className="campaign-file-actions"><DropdownMenuItem onSelect={()=>document.getElementById('importDraftButton')?.click()}><FileUp />Import draft</DropdownMenuItem><DropdownMenuItem onSelect={()=>document.getElementById('exportDraftButton')?.click()}><FileDown />Export draft</DropdownMenuItem></DropdownMenuGroup>
     </DropdownMenuContent>
-  </DropdownMenu><AlertDialog open={!!remove} onOpenChange={open=>!open&&setRemove(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete this draft?</AlertDialogTitle><AlertDialogDescription>{remove}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={()=>{document.dispatchEvent(new CustomEvent('mailbot:delete-draft',{detail:{name:remove}}));setRemove(null);refresh();}}>Delete draft</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>;
+  </DropdownMenu></EditableTitle><AlertDialog open={!!remove} onOpenChange={open=>!open&&setRemove(null)}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete this draft?</AlertDialogTitle><AlertDialogDescription>{remove}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={()=>{document.dispatchEvent(new CustomEvent('mailbot:delete-draft',{detail:{name:remove}}));setRemove(null);refresh();}}>Delete draft</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>;
 }
 
 function EditorToolbar() {
@@ -222,11 +458,13 @@ function SendConfirmation() {
 }
 
 for (const [id, component] of [
+  ['messageSenderFields', <MessageSenderFields />],
   ['previewRecipientControl', <NativeSelect id="previewSelect" aria-label="Preview recipient" />],
   ['campaignMenu', <CampaignMenu />], ['newCampaignAction', <Button id="newDraft" type="button" variant="outline"><Plus data-icon="inline-start" />New mail</Button>], ['recipientTable', <RecipientTable />], ['formatToolbar', <EditorToolbar />],
   ['campaignFlow', <CampaignFlow />], ['previewTools', <PreviewTools />],
   ['deliveryControls', <SendControls />], ['audienceMenu', <AudienceMenu />],
-  ['recipientTools', <RecipientTools />],
+  ['recipientTools', <RecipientTools />], ['audienceSummary', <AudienceSummary />],
+  ['newGroupAction', <Button id="newRecipientList" type="button" variant="outline"><Plus data-icon="inline-start" />New group</Button>],
   ['sendConfirmation', <SendConfirmation />],
 ] as const) {
   const mount = document.getElementById(id);

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {viewSettings,activeViewFilter,namedViews} from '../public/recipient-views.js';
+import {viewSettings,activeViewFilter,namedViews,audienceSummary} from '../public/recipient-views.js';
 import {filterAudience} from '../public/audience.js';
 test('opening the database starts with every contact regardless of campaign purpose',()=>{
  const contacts=[{id:'a',properties:{Name:'A',Email:'a@example.org','Subscription status':'Subscribed'}},{id:'b',properties:{Name:'B',Email:'b@example.org','Subscription status':'Not subscribed','Current member':true}}];
@@ -43,4 +43,14 @@ test('empty filter groups are ignored instead of broadening OR conditions',()=>{
  const f=activeViewFilter({match:'any',rules:[{property:'Name',operator:'equals',value:'Alex'},{rules:[{property:'Lists',operator:'contains',value:''}]}]});
  assert.equal(f.rules.length,1);
  assert.equal(activeViewFilter({rules:[]}),null);
+});
+
+test('summary shows the main filter and condenses individual exclusions into Customized',()=>{
+ const source={sourceId:'contacts',purpose:'newsletter',filter:{match:'all',rules:[
+  {property:'Lists',operator:'contains',value:'Demo Day'},
+  ...Array.from({length:12},(_,i)=>({property:'Email',operator:'not_equals',value:`person${i}@example.invalid`}))
+ ]}};
+ assert.deepEqual(audienceSummary(source,null,false),{
+  origin:'Notion',chips:['Newsletter subscribers','Lists contains Demo Day'],customized:true
+ });
 });

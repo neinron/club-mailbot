@@ -19,15 +19,20 @@ function value(property) {
 export function contactFromPage(page) {
   return { id: page.id, url: page.url, properties: deriveProperties(Object.fromEntries(Object.entries(page.properties || {}).map(([k,p]) => [k, value(p)]))) };
 }
-export async function loadNotionAudience() {
+export async function loadNotionFields() {
   const config = notionConfig();
   if (!config.configured) throw new Error('Notion is not configured. Add NOTION_API_KEY to the local .env file and restart Mailbot.');
   const schema = await notionRequest(`/data_sources/${encodeURIComponent(config.sourceId)}`);
-  const pages = await queryNotionSource(config.sourceId);
-  const contacts = pages.filter(p => !p.archived && !p.in_trash).map(contactFromPage);
-  const fields = Object.entries(schema.properties).map(([name,p]) => ({ name,
+  return Object.entries(schema.properties).map(([name,p]) => ({ name, notionType:p.type,
     type: ['title','rich_text','email','url','phone_number'].includes(p.type) ? 'text' : ['created_time','last_edited_time'].includes(p.type) ? 'date' : p.type === 'status' ? 'select' : ['select','multi_select','checkbox','number','date'].includes(p.type) ? p.type : 'text',
     options: (p[p.type]?.options || []).map(o => o.name) }));
+}
+
+export async function loadNotionAudience() {
+  const config = notionConfig();
+  const fields = await loadNotionFields();
+  const pages = await queryNotionSource(config.sourceId);
+  const contacts = pages.filter(p => !p.archived && !p.in_trash).map(contactFromPage);
   for (const name of ['Completed applications','Incomplete applications','Marketing opt-in phases','Lists']) {
     const options = [...new Set(contacts.flatMap(c => c.properties[name]))].sort();
     const field = fields.find(f => f.name === name);

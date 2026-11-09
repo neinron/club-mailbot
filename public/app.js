@@ -43,6 +43,7 @@ const elements = {
   smtpSecurity: document.querySelector("#smtpSecurity"),
   secretLabel: document.querySelector("#secretLabel"),
   fromName: document.querySelector("#fromName"),
+  replyTo: document.querySelector("#replyTo"),
   draftName: document.querySelector("#draftName"),
   draftSelect: document.querySelector("#draftSelect"),
   csvFile: document.querySelector("#csvFile"),
@@ -101,6 +102,9 @@ let uiInitialized = false;
 let pendingReusableList = null;
 let pendingListIsCurrent = false;
 let audienceSource = null;
+let audienceDetails = null;
+let notionFields;
+let legacyNotionSchema;
 let recipientColumns = [...defaultRecipientColumns];
 let parseStats = { invalid: 0, duplicates: 0 };
 let autosaveTimer = null;
@@ -245,7 +249,8 @@ function canonicalColumnFromHeader(header) {
   if (["interviewlink", "interview link", "einladungslink", "einladung", "link", "invite link"].includes(normalized)) {
     return { key: "interviewLink", label: originalLabel, role: "text" };
   }
-  return { key: slugifyHeader(originalLabel), label: originalLabel, role: "text" };
+  const key = slugifyHeader(originalLabel);
+  return { key, label: isNotionPageColumn({key}) ? "Notion Page" : originalLabel, role: "text" };
 }
 
 function normalizeColumnRole(value) {
@@ -859,9 +864,11 @@ function collectDraft() {
     authMode: elements.authMode.value,
     smtpSecurity: elements.smtpSecurity.value,
     fromName: elements.fromName.value.trim(),
+    replyTo: elements.replyTo.value.trim(),
     recipientColumns,
     recipients,
     audienceSource,
+    audienceDetails,
     subject: elements.subject.value,
     body: elements.body.value,
     htmlBody: elements.htmlBody.value,
@@ -961,6 +968,22 @@ function setSelectedTableName(name) {
   }
 }
 
+async function renameSavedList(oldName, requestedName) {
+  const {renameNamedList} = await import('./recipient-views.js');
+  const name = requestedName.trim();
+  const collection = renameNamedList(readTableCollection(), oldName, name);
+  writeTableCollection(collection);
+  updateTableSelectOptions(name);
+  setSelectedTableName(name);
+  if (elements.tableName.value === oldName) {
+    elements.tableName.value = name;
+    updateTable();
+    saveDraft();
+  }
+  setStatus(`Group renamed to “${name}”.`,'ok');
+  return name;
+}
+
 function getSelectedTableName() {
   try {
     return normalizeTableName(localStorage.getItem(selectedTableStorageKey) || elements.tableName?.value);
@@ -1028,6 +1051,7 @@ function collectTableState() {
     recipientColumns,
     recipients,
     audienceSource,
+    audienceDetails,
     savedAt: new Date().toISOString()
   };
 }
@@ -1060,18 +1084,44 @@ function queueAutosave() {
   }, autosaveDelayMs);
 }
 
-function hydrateRecipientData(columns, rows, source = null) {
+function isNotionPageColumn(column) {
+  return ['applicationpage', 'notionpage', 'notionpageid'].includes(String(column?.key || '').replace(/[^a-z]/gi, '').toLowerCase());
+}
+
+function hydrateRecipientData(columns, rows, source = null, details = null) {
   audienceSource = source;
+  audienceDetails = details;
   recipientColumns = Array.isArray(columns) && columns.length
     ? columns.map((column) => ({
       key: String(column.key || slugifyHeader(column.label || column.key || "property")).trim(),
-      label: String(column.label || column.key || "Property").trim(),
-      role: normalizeColumnRole(column.role)
+      label: isNotionPageColumn(column) ? "Notion Page" : String(column.label || column.key || "Property").trim(),
+      role: normalizeColumnRole(column.role),
+      ...(typeof column.notion?.type === 'string' && Array.isArray(column.notion.options) ? {notion:column.notion} : {})
     }))
     : [...defaultRecipientColumns];
   recipients = Array.isArray(rows) ? rows.map(ensureRequiredRecipientFields) : [];
   syncRawRecipientsFromTable();
   parseStats = { invalid: 0, duplicates: 0 };
+  if (!notionFields) return;
+  if (recipientColumns.some(column => column.key === 'applicationPage')) {
+    recipientColumns = notionFields.attachNotionFields(recipientColumns, [], true);
+  }
+  const originalFields = new Set(['name','first name','last name','email',...(source?.fields || []).map(name=>name.toLowerCase())]);
+  if (source?.sourceId && recipientColumns.some(column => !column.notion && originalFields.has(column.label.toLowerCase()))) {
+    const activeColumns = recipientColumns;
+    legacyNotionSchema ||= fetch('/api/notion/fields').then(response => {
+      if (!response.ok) throw new Error('Notion fields unavailable.');
+      return response.json();
+    }).catch(() => {
+      legacyNotionSchema = null;
+      return null;
+    });
+    legacyNotionSchema.then(schema => {
+      if (recipientColumns !== activeColumns || schema?.sourceId !== source.sourceId) return;
+      recipientColumns = notionFields.attachNotionFields(recipientColumns, schema.fields);
+      updateTable();
+    });
+  }
 }
 
 function applyTableState(table, showStatus = true) {
@@ -1080,7 +1130,7 @@ function applyTableState(table, showStatus = true) {
     if (elements.tableName) {
       elements.tableName.value = normalizeTableName(table.tableName);
     }
-    hydrateRecipientData(table.recipientColumns, table.recipients, table.audienceSource);
+    hydrateRecipientData(table.recipientColumns, table.recipients, table.audienceSource, table.audienceDetails);
     updateTable();
     updatePreview();
     updateTableSelectOptions(normalizeTableName(table.tableName));
@@ -1147,6 +1197,7 @@ function applyDraft(draft, showStatus = true) {
     elements.authMode.value = draft.authMode === "xoauth2" ? "xoauth2" : "appPassword";
     elements.smtpSecurity.value = draft.smtpSecurity === "starttls587" ? "starttls587" : "ssl465";
     elements.fromName.value = draft.fromName || "Club Team";
+    elements.replyTo.value = draft.replyTo || "";
     elements.subject.value = draft.subject || "";
     elements.body.value = draft.body || "";
     elements.htmlBody.value = withClubLogo(draft.htmlBody || "");
@@ -1155,10 +1206,9 @@ function applyDraft(draft, showStatus = true) {
     previewIndex = 0;
 
     if (Array.isArray(draft.recipients)) {
-      hydrateRecipientData(draft.recipientColumns, draft.recipients, draft.audienceSource);
+      hydrateRecipientData(draft.recipientColumns, draft.recipients, draft.audienceSource, draft.audienceDetails);
     } else {
-      recipients = parseRecipients(draft.rawRecipients || "");
-      syncRawRecipientsFromTable();
+      hydrateRecipientData(defaultRecipientColumns, parseRecipients(draft.rawRecipients || ""));
     }
 
     updateAuthUi();
@@ -1218,8 +1268,13 @@ function deleteDraft() {
   }
 }
 
+function markAudienceCustomized() {
+  audienceDetails = { ...audienceDetails, customized: true };
+}
+
 function removeRecipient(index) {
   recipients.splice(index, 1);
+  markAudienceCustomized();
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
@@ -1232,6 +1287,7 @@ function addRecipient(atStart = false) {
   const emptyRecipient = Object.fromEntries(recipientColumns.map((column) => [column.key, ""]));
   if (atStart === true) recipients.unshift(ensureRequiredRecipientFields(emptyRecipient));
   else recipients.push(ensureRequiredRecipientFields(emptyRecipient));
+  markAudienceCustomized();
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
@@ -1252,6 +1308,7 @@ function addColumn() {
 
   recipientColumns.push(nextColumn);
   recipients = recipients.map((recipient) => ({ ...recipient, [nextColumn.key]: String(recipient[nextColumn.key] || "") }));
+  markAudienceCustomized();
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
@@ -1261,7 +1318,7 @@ function addColumn() {
 
 function deleteColumn(index) {
   const column = recipientColumns[index];
-  if (!column) return;
+  if (!column || isNotionPageColumn(column)) return;
   if (recipientColumns.length <= 1) {
     setStatus("At least one column must remain.", "error");
     return;
@@ -1273,6 +1330,7 @@ function deleteColumn(index) {
     delete updated[column.key];
     return ensureRequiredRecipientFields(updated);
   });
+  markAudienceCustomized();
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
@@ -1284,25 +1342,44 @@ function renameColumn(index, nextLabel) {
   const trimmed = String(nextLabel || "").trim();
   if (!trimmed) return;
   const current = recipientColumns[index];
-  if (!current) return;
+  if (!current || current.label === trimmed || isNotionPageColumn(current)) return;
   if (recipientColumns.some((column,i) => i !== index && column.label.toLowerCase() === trimmed.toLowerCase())) { setStatus('A column with this name already exists.', 'error'); return; }
   recipientColumns[index] = {...current, label:trimmed};
+  markAudienceCustomized();
   syncRawRecipientsFromTable();
   updateTable();
   updatePreview();
   queueAutosave();
 }
 
+function moveRecipientColumn(from, to) {
+  const source = recipientColumns.findIndex(column => column.key === from);
+  const target = recipientColumns.findIndex(column => column.key === to);
+  if (source < 0 || target < 0 || source === target) return;
+  const [column] = recipientColumns.splice(source, 1);
+  recipientColumns.splice(target, 0, column);
+  markAudienceCustomized();
+  syncRawRecipientsFromTable();
+  updateTable();
+  queueAutosave();
+}
+
 function updateColumnRole(index, role) {
   recipientColumns[index].role = normalizeColumnRole(role);
+  markAudienceCustomized();
   updateTable();
   updatePreview();
   queueAutosave();
 }
 
 function updateRecipientCell(index, key, value) {
+  if (!recipients[index] || isNotionPageColumn({key})) return;
+  const column = recipientColumns.find(column => column.key === key);
+  const currentValue = String(recipients[index][key] ?? "");
+  if (!column || currentValue === value || notionFields?.acceptsNotionValue(column.notion, value, currentValue) === false) return;
   const updated = { ...recipients[index], [key]: value };
   recipients[index] = ensureRequiredRecipientFields(updated);
+  markAudienceCustomized();
   syncRawRecipientsFromTable();
   updatePreview();
   queueAutosave();
@@ -1330,10 +1407,11 @@ function applyPastedRecipientTable(startRow, startColumnIndex, text) {
     row.forEach((cell, columnOffset) => {
       const columnIndex = startColumnIndex + columnOffset;
       const column = recipientColumns[columnIndex];
-      if (!column) return;
+      if (!column || isNotionPageColumn(column)) return;
       const nextValue = String(cell || "");
       const currentValue = String(recipients[recipientIndex]?.[column.key] || "");
       if (currentValue === nextValue) return;
+      if (notionFields?.acceptsNotionValue(column.notion, nextValue, currentValue) === false) return;
       recipients[recipientIndex] = ensureRequiredRecipientFields({
         ...recipients[recipientIndex],
         [column.key]: nextValue
@@ -1343,6 +1421,7 @@ function applyPastedRecipientTable(startRow, startColumnIndex, text) {
   });
 
   if (!changed) return false;
+  markAudienceCustomized();
   syncRawRecipientsFromTable();
   updatePreview();
   queueAutosave();
@@ -1361,12 +1440,6 @@ function recipientApplication(recipient) {
 }
 
 function updateTable() {
-  const purposeNames = {deadline:'Application deadline',newsletter:'Newsletter',recruiting:'Recruiting invitation',reminder:'Application reminder',browse:'Contact review'};
-  const audienceContext = document.querySelector('#audienceContext');
-  if (audienceContext) audienceContext.textContent = audienceSource
-    ? `Notion snapshot · ${purposeNames[audienceSource.purpose] || 'Saved audience'} · updated ${formatSavedAt(audienceSource.loadedAt)}${audienceSource.purpose === 'browse' ? ' · Review only' : ''}`
-    : recipients.length ? 'Local list · Saved with this campaign' : 'Notion, a saved list, or a CSV import.';
-  const refresh = document.querySelector('#refreshAudience'); if (refresh) refresh.hidden = !audienceSource?.sourceId;
   const save = document.querySelector('#openSaveList'); if (save) save.disabled = !recipients.length;
   if (elements.addRecipientButton) { elements.addRecipientButton.disabled = Boolean(audienceSource?.sourceId); elements.addRecipientButton.title = audienceSource?.sourceId ? 'Add new contacts in Notion, then refresh this audience.' : ''; }
   elements.recipientCount.textContent = `${recipients.length} ${recipients.length === 1 ? "recipient" : "recipients"}`;
@@ -1374,8 +1447,11 @@ function updateTable() {
   elements.invalidCount.textContent = parseStats.invalid ? `${parseStats.invalid} invalid addresses excluded` : '';
   if (elements.summaryRecipientCount) elements.summaryRecipientCount.textContent = String(recipients.length);
   if (document.documentElement.dataset.studioReady === 'true') {
-    document.dispatchEvent(new CustomEvent('mailbot:recipient-table', {detail:{columns:recipientColumns,rows:recipients,canAdd:!audienceSource?.sourceId}}));
-    document.dispatchEvent(new CustomEvent('mailbot:campaign-state', {detail:{draftName:elements.draftName.value,canRefresh:!!audienceSource?.sourceId,tableName:recipients.length || elements.tableName.value !== 'Default list' ? elements.tableName.value : 'Choose a list'}}));
+    const columns = recipientColumns.map(column => isNotionPageColumn(column)
+      ? {...column, label:'Notion Page', readOnly:true}
+      : column);
+    document.dispatchEvent(new CustomEvent('mailbot:recipient-table', {detail:{columns,rows:recipients,canAdd:!audienceSource?.sourceId}}));
+    publishCampaignState();
     updateEditorVariables();
     return;
   }
@@ -1464,6 +1540,11 @@ function fitVisiblePreviews() {
   fitComposerFrame();
 }
 
+function validReplyTo() {
+  const address = elements.replyTo.value.trim();
+  return !address || (elements.replyTo.validity.valid && emailPattern.test(address));
+}
+
 function updatePreview() {
   previewIndex = Math.min(previewIndex, Math.max(0, recipients.length - 1));
   const recipient = recipients[previewIndex];
@@ -1481,6 +1562,11 @@ function updatePreview() {
   }
   const previewFrom = document.getElementById('previewFrom');
   if (previewFrom) previewFrom.textContent = `${elements.fromName.value || 'Sender'} <${elements.accountEmail.value || 'No sender connected'}>`;
+  const replyTo = elements.replyTo.value.trim();
+  const previewReplyToRow = document.getElementById('previewReplyToRow');
+  previewReplyToRow.hidden = !replyTo;
+  document.getElementById('previewReplyTo').textContent = replyTo;
+  elements.replyTo.setAttribute('aria-invalid', String(!validReplyTo()));
   elements.previewRecipient.textContent = recipient ? `${recipient.name} · ${recipient.email}` : "No recipient";
   elements.previewSubject.textContent = renderTemplate(elements.subject.value, recipient);
   if (document.activeElement !== elements.previewBody) {
@@ -1492,6 +1578,7 @@ function updatePreview() {
   const canSend = Boolean(
     emailPattern.test(elements.accountEmail.value.trim())
       && hasCredentials()
+      && validReplyTo()
       && elements.subject.value.trim()
       && elements.body.value.trim()
       && elements.htmlBody.value.includes("{{content}}")
@@ -1585,6 +1672,7 @@ async function testAuth() {
 
 function parseCurrentInput() {
   audienceSource = null;
+  audienceDetails = {kind:"csv"};
   // A new import must not inherit a previous Notion list's column order.
   recipientColumns = [...defaultRecipientColumns];
   recipients = parseRecipients(elements.rawRecipients.value);
@@ -1596,6 +1684,7 @@ function parseCurrentInput() {
 
 async function send(testOnly) {
   if (!recipients.length || sending) return;
+  if (!validReplyTo()) { setStatus("Enter a valid Reply-To email address.", "error"); return; }
   const testEmail = document.querySelector("#testEmail").value.trim();
   if (testOnly && !emailPattern.test(testEmail)) { setStatus("Enter a valid test address.", "error"); return; }
 
@@ -1619,6 +1708,7 @@ async function send(testOnly) {
         authMode: elements.authMode.value,
         smtpSecurity: elements.smtpSecurity.value,
         fromName: elements.fromName.value.trim(),
+        replyTo: elements.replyTo.value.trim(),
         draftName: elements.draftName.value.trim(),
         campaignKey: campaignProgressKey(currentCampaignIdentity()),
         subject: elements.subject.value,
@@ -1675,7 +1765,7 @@ async function send(testOnly) {
 
 elements.parseButton.addEventListener("click", () => {
   parseCurrentInput();
-  elements.tableName.value = 'Imported recipients';
+  elements.tableName.value = document.querySelector('#csvGroupName').value.trim() || 'Imported recipients';
   updateTable();
   document.querySelector('#audienceDialog').close();
   queueAutosave();
@@ -1713,7 +1803,7 @@ elements.clearButton.addEventListener("click", () => {
   elements.rawRecipients.value = "";
   recipientColumns = [...defaultRecipientColumns];
   recipients = [];
-  audienceSource = null;
+  markAudienceCustomized();
   parseStats = { invalid: 0, duplicates: 0 };
   updateTable();
   updatePreview();
@@ -1853,7 +1943,7 @@ elements.recipientRows.addEventListener("click", (event) => {
   removeRecipient(Number(button.getAttribute("data-remove-row")));
 });
 
-[elements.accountEmail, elements.appPassword, elements.fromName, elements.draftName, elements.subject, elements.htmlBody].forEach((element) => {
+[elements.accountEmail, elements.appPassword, elements.fromName, elements.replyTo, elements.draftName, elements.subject, elements.htmlBody].forEach((element) => {
   element.addEventListener("input", updatePreview);
   if (element !== elements.appPassword) {
     element.addEventListener("input", queueAutosave);
@@ -1896,6 +1986,7 @@ elements.clearLogsButton.addEventListener("click", () => {
 });
 
 try {
+  notionFields = await import('./notion-fields.js');
   const workspaceStorage = await import('./workspace-store.js');
   persistCollection = workspaceStorage.persistCollection;
   await workspaceStorage.restoreWorkspace({ drafts: draftCollectionStorageKey, lists: tableCollectionStorageKey });
@@ -2155,13 +2246,26 @@ function updateDesignPreview() {
   document.querySelector('#designPreview').srcdoc = renderHtmlMessage(buildDesignTemplate(), elements.body.value, recipients[previewIndex] || {name:"Alex Example",email:"alex@example.com"});
 }
 
+function publishCampaignState() {
+  const hasAudience = Boolean(recipients.length || audienceDetails || audienceSource || elements.tableName.value !== 'Default list');
+  document.dispatchEvent(new CustomEvent('mailbot:campaign-state', { detail: {
+    draftName: elements.draftName.value,
+    tableName: hasAudience ? elements.tableName.value : 'Choose a group',
+    canRefresh: Boolean(audienceSource?.sourceId),
+    hasAudience,
+    hasApplicationPages: recipientColumns.some(column => column.key.toLowerCase() === 'applicationpage'),
+    audienceSource,
+    audienceDetails
+  }}));
+}
+
 function syncStudio() {
   syncVisualEditor();
   const select = document.querySelector('#previewSelect');
   const options = recipients.map((r,i) => `<option value="${i}">${escapeHtml(r.name ? `${r.name} · ${r.email}` : r.email)}</option>`).join('') || '<option value="0">Example without recipient</option>';
   if (select.innerHTML !== options) select.innerHTML = options;
   select.value = String(previewIndex);
-  document.dispatchEvent(new CustomEvent('mailbot:campaign-state', {detail:{draftName:elements.draftName.value,canRefresh:!!audienceSource?.sourceId,tableName:recipients.length || elements.tableName.value !== 'Default list' ? elements.tableName.value : 'Choose a list'}}));
+  publishCampaignState();
   const campaignName = document.getElementById('activeCampaignName');
   if (campaignName) campaignName.textContent = elements.draftName.value || 'Untitled draft';
   const sender = document.getElementById('deliverySender');
@@ -2174,6 +2278,7 @@ function syncStudio() {
     [emailPattern.test(elements.accountEmail.value.trim()) && hasCredentials(),'Sender connected','Connect your sender account','account'],
     [recipients.length > 0,`${recipients.length} recipients selected`,'Choose recipients','recipients'],
     [recipients.every(row=>emailPattern.test(row.email)),'Recipient addresses ready','Complete the recipient email addresses','recipients'],
+    [validReplyTo(),'Reply-To ready','Enter a valid Reply-To email','message'],
     [!!elements.subject.value.trim(),'Subject ready','Add a subject','message'],
     [!!elements.body.value.trim(),'Message ready','Write your message','message'],
     [elements.htmlBody.value.includes('{{content}}'),'Design ready','Choose an email design','message']
@@ -2301,6 +2406,12 @@ function initStudio() {
     const target = event.target.closest('[data-page-target]');
     if (target) activatePage(target.dataset.pageTarget);
   });
+  document.addEventListener('mailbot:move-column', event=>moveRecipientColumn(event.detail.from,event.detail.to));
+  document.addEventListener('mailbot:recipient-cell', event=>{
+    const {index,key,value} = event.detail;
+    updateRecipientCell(index,key,value);
+  });
+  document.addEventListener('mailbot:delete-column', event=>deleteColumn(event.detail.index));
   document.addEventListener('mailbot:rename-column', event=>renameColumn(event.detail.index,event.detail.label));
   document.addEventListener('mailbot:add-column', event=>addColumn(event.detail.label));
   document.addEventListener('mailbot:add-person', ()=>{
@@ -2308,10 +2419,28 @@ function initStudio() {
     requestAnimationFrame(()=>document.querySelector('#recipientRows input[data-row-index="0"]')?.focus());
   });
   document.getElementById('newRecipientList').addEventListener('click',()=>{
-    const collection=readTableCollection();let name='New list',index=2;
-    while(collection[name])name=`New list ${index++}`;
-    recipients=[];audienceSource=null;recipientColumns=[{key:'name',label:'Name',role:'text'},{key:'email',label:'Email',role:'to'}];
+    const collection=readTableCollection();let name='New group',index=2;
+    while(collection[name])name=`New group ${index++}`;
+    recipients=[];audienceSource=null;audienceDetails=null;recipientColumns=[{key:'name',label:'Name',role:'text'},{key:'email',label:'Email',role:'to'}];
     elements.tableName.value=name;syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();
+  });
+  document.addEventListener('mailbot:rename-group', async event => {
+    const name = event.detail.name.trim();
+    const oldName = elements.tableName.value;
+    if (!name || name === oldName) return;
+    try {
+      const groups = readTableCollection();
+      if (Object.hasOwn(groups, oldName)) {
+        await renameSavedList(oldName, name);
+        return;
+      }
+      if (Object.hasOwn(groups, name)) throw new Error('A group with this title already exists.');
+      elements.tableName.value = name;
+      updateTable();
+      saveDraft();
+    } catch (error) {
+      setStatus(error.message, 'error');
+    }
   });
   document.addEventListener('mailbot:select-draft',event=>{
     const name=event.detail.name;if(!readDraftCollection()[name])return;
@@ -2346,8 +2475,8 @@ function initStudio() {
     clearTimeout(autosaveTimer);if(readDraftCollection()[elements.draftName.value])saveDraft();
     const collection=readDraftCollection();let name='New mail';let i=2;while(collection[name])name=`New mail ${i++}`;
     lastDelivery = null;
-    setSelectedDraftName(name);elements.draftName.value=name;elements.subject.value='';elements.body.value='<p>Hi {{firstName}},</p><p><br></p><p>Best,<br>The Social AI Club Team</p>';
-    recipients=[];audienceSource=null;recipientColumns=[{key:'name',label:'Name',role:'text'},{key:'email',label:'Email',role:'to'}];elements.tableName.value='Default list';syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('recipients');
+    setSelectedDraftName(name);elements.draftName.value=name;elements.subject.value='';elements.replyTo.value='';elements.body.value='<p>Hi {{firstName}},</p><p><br></p><p>Best,<br>The Social AI Club Team</p>';
+    recipients=[];audienceSource=null;audienceDetails=null;recipientColumns=[{key:'name',label:'Name',role:'text'},{key:'email',label:'Email',role:'to'}];elements.tableName.value='Default list';syncRawRecipientsFromTable();updateTable();updatePreview();saveDraft();activatePage('recipients');
   });
   document.querySelector('#deleteDraftButton').addEventListener('click',()=>{
     clearTimeout(autosaveTimer);
@@ -2413,22 +2542,15 @@ elements.recipientRows.addEventListener('click',event=>{
 import('./notion-ui.js').then(({initNotionBrowser}) => initNotionBrowser({
   setStatus,
   getCurrentSource:()=>audienceSource,
+  getCurrentGroup:()=>({name:elements.tableName.value, draft:elements.draftName.value, details:audienceDetails}),
   getSavedLists:()=>readTableCollection(),
-  async renameSavedList(oldName,newName) {
-    const {renameNamedList}=await import('./recipient-views.js');
-    const collection=renameNamedList(readTableCollection(),oldName,newName);
-    const name=String(newName).trim();
-    writeTableCollection(collection);updateTableSelectOptions(name);setSelectedTableName(name);
-    if(elements.tableName.value===oldName){elements.tableName.value=name;updateTable();saveDraft();}
-    setStatus(`List renamed to “${name}”.`,'ok');
-    return name;
-  },
+  renameSavedList,
   saveSnapshot:openReusableList,
   useSnapshot(snapshot) {
-    hydrateRecipientData(snapshot.recipientColumns, snapshot.recipients, snapshot.audienceSource);
+    hydrateRecipientData(snapshot.recipientColumns, snapshot.recipients, snapshot.audienceSource, snapshot.audienceDetails);
     elements.tableName.value = snapshot.tableName;
     updateTable(); updatePreview(); saveDraft();
-    setStatus(`${recipients.length} recipients attached to this campaign.`, 'ok');
+    setStatus(`${recipients.length} ${recipients.length===1?'recipient':'recipients'} attached to this campaign.`, 'ok');
   }
 })).catch(error => setStatus(`Audience selection could not start: ${error.message}`, 'error'));
 uiInitialized = true;

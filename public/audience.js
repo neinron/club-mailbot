@@ -1,4 +1,5 @@
 import { contactLists } from './contact-lists.js';
+import { attachNotionFields } from './notion-fields.js';
 // Shared by the browser and server so saved audiences use the same rules.
 export const purposes = {
   recruiting: 'Recruiting invitation', newsletter: 'Newsletter',
@@ -55,7 +56,7 @@ export function memberCopyAllowed(contact, {purpose,memberCopies=[]} = {}) {
 
 export const operators = {
   text: ['contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', 'empty', 'not_empty'],
-  select: ['equals', 'not_equals', 'empty', 'not_empty'],
+  select: ['equals', 'not_equals', 'contains', 'not_contains', 'empty', 'not_empty'],
   multi_select: ['contains', 'not_contains', 'empty', 'not_empty'],
   checkbox: ['equals'], number: ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'empty', 'not_empty'],
   date: ['on', 'before', 'after', 'on_or_before', 'on_or_after', 'empty', 'not_empty']
@@ -81,9 +82,15 @@ export function matchFilter(properties, filter) {
   if (typeof actual === 'boolean') return filter.operator === 'equals' && actual === (filter.value === true || filter.value === 'true');
   const a = String(actual ?? '').toLocaleLowerCase();
   const b = String(filter.value ?? '').toLocaleLowerCase();
+  const contains = () => Array.isArray(actual)
+    ? actual.some(value => {
+        const item = String(value).toLocaleLowerCase();
+        return filter.partialMatch ? item.includes(b) : item === b;
+      })
+    : a.includes(b);
   switch (filter.operator) {
-    case 'contains': return Array.isArray(actual) ? actual.some(x => String(x).toLocaleLowerCase() === b) : a.includes(b);
-    case 'not_contains': return Array.isArray(actual) ? !actual.some(x => String(x).toLocaleLowerCase() === b) : !a.includes(b);
+    case 'contains': return contains();
+    case 'not_contains': return !contains();
     case 'equals': return a === b;
     case 'not_equals': return a !== b;
     case 'starts_with': return a.startsWith(b);
@@ -118,7 +125,7 @@ export function filterAudience(contacts, { purpose = 'browse', phase, filter, se
   return { contacts: limit > 0 ? matched.slice(0, limit) : matched, eligible: eligible.length, matched: matched.length, excluded: contacts.length-eligible.length };
 }
 
-export function recipientSnapshot(contacts, fields) {
+export function recipientSnapshot(contacts, fields, schema = []) {
   const canonical = { Name: 'name', 'First name': 'firstName', 'Last name': 'lastName', Email: 'email', 'Marketing opt-in phases': 'marketingOptInPhases', 'Newsletter opt-in recorded': 'newsletterOptInRecorded', 'Luma check-in recorded': 'lumaCheckInRecorded' };
   const selected = [...new Set(['Name', 'First name', 'Last name', 'Email', ...fields])];
   const used = new Set(['notionPageId']);
@@ -135,5 +142,5 @@ export function recipientSnapshot(contacts, fields) {
     const value = col.key === 'notionPageId' ? c.id : c.properties[col.label];
     return [col.key, Array.isArray(value) ? value.join('; ') : typeof value === 'boolean' ? String(value) : String(value ?? '')];
   })));
-  return { recipientColumns: columns, recipients };
+  return { recipientColumns: attachNotionFields(columns, schema), recipients };
 }

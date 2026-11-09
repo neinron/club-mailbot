@@ -40,6 +40,24 @@ test('missing content slot is rejected before SMTP',async()=>{
 test('normal send retains intended address and copy roles',async()=>{
  const {context,sent}=setup();const result=await request(context,{...payload,testOnly:false,recipients:recipients.slice(0,1)});assert.equal(result.status,200);assert.deepEqual([...sent[0].to],['alex@example.com']);assert.deepEqual([...sent[0].cc],['copy@example.com']);
 });
+test('campaign Reply-To overrides the row Reply-To without changing delivery recipients',async()=>{
+ const {context,sent}=setup();
+ const group={...payload,testOnly:false,recipients:[{...recipients[0],reply:'row@example.com'}],
+  recipientColumns:[...columns,{key:'reply',label:'Reply-To',role:'replyTo'}]};
+ const result=await request(context,{...group,replyTo:'club@example.com'});
+ assert.equal(result.status,200);
+ assert.deepEqual([...sent[0].to],['alex@example.com']);
+ assert.deepEqual([...sent[0].replyTo],['club@example.com']);
+ const fallback=setup();
+ assert.equal((await request(fallback.context,group)).status,200);
+ assert.deepEqual([...fallback.sent[0].replyTo],['row@example.com']);
+});
+test('an invalid campaign Reply-To is rejected before SMTP',async()=>{
+ const {context,sent}=setup();
+ const result=await request(context,{...payload,replyTo:'a@example.com,b@example.com'});
+ assert.equal(result.status,400);
+ assert.equal(sent.length,0);
+});
 test('browser and server agree on first-name personalization and generated design',()=>{
  const clientSource=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
  const client=vm.createContext({document:{querySelector:()=>({}),querySelectorAll:()=>[]}});

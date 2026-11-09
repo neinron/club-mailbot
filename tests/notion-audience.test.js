@@ -36,6 +36,25 @@ test('nested filters narrow an eligible audience and preserve false/empty/multip
  assert.equal(snapshot.recipients[0].origins,'Luma; Winter 2026 application');
  assert.equal(snapshot.recipientColumns.find(c=>c.key==='firstName').label,'First name');
 });
+test('new typed contains filters match partial tags without changing older saved rules',()=>{
+ const properties={Lists:['Demo Day','Newsletter']};
+ const contains={property:'Lists',operator:'contains',value:'demo'};
+ assert.equal(matchFilter(properties,contains),false);
+ assert.equal(matchFilter(properties,{...contains,partialMatch:true}),true);
+ assert.equal(matchFilter(properties,{...contains,operator:'not_contains',partialMatch:true}),false);
+});
+
+test('recipient snapshots keep source field types and every allowed choice',()=>{
+ const schema=[
+  {name:'Stage',type:'select',notionType:'status',options:['New','Ready']},
+  {name:'Interests',type:'multi_select',notionType:'multi_select',options:['Luma','Tally']}
+ ];
+ const snapshot=recipientSnapshot([{id:'page',properties:{Stage:'New',Interests:['Luma']}}],['Stage','Interests'],schema);
+ assert.deepEqual(snapshot.recipientColumns.find(column=>column.key==='stage').notion,schema[0]);
+ assert.deepEqual(snapshot.recipientColumns.find(column=>column.key==='interests').notion,schema[1]);
+ assert.equal(snapshot.recipients[0].interests,'Luma');
+});
+
 test('delivery revalidates consent, completion, membership and contact identity from Notion',async()=>{
  const savedEnv={...process.env},originalFetch=global.fetch;
  process.env.NOTION_DATA_SOURCE_ID=defaultSourceId;process.env.NOTION_API_KEY='synthetic-test';process.env.NOTION_CURRENT_APPLICATION_PHASE=phase;
