@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {applicationHistory,deriveProperties,eligibility,matchFilter,filterAudience,recipientSnapshot} from '../public/audience.js';
+import {applicationHistory,deriveProperties,eligibility,matchFilter,filterAudience,operators,recipientSnapshot} from '../public/audience.js';
 import {validateNotionRecipients,defaultSourceId} from '../server/notion-audience.js';
 const phase='Winter 2026';
 const contact=(id,properties={})=>({id,properties:deriveProperties({Name:'Alex Example','First name':'Alex','Last name':'Example',Email:`${id}@example.org`,'Subscription status':'Subscribed','Current member':false,...properties})});
+
+test('text and choice filters default to Is and test prefixes on individual selections',()=>{
+ for(const type of ['text','select','multi_select']) assert.deepEqual(operators[type].slice(0,5),['equals','not_equals','contains','not_contains','starts_with']);
+ assert.equal(matchFilter({Labels:['Demo','Newsletter']},{property:'Labels',operator:'starts_with',value:'news'}),true);
+});
 
 test('application history separates phases, completion and finalized marketing opt-ins',()=>{
  const h=applicationHistory({'Application state':'Summer 2026: completed; Winter 2026: partial','Source records':'Tally kd5oKM | old | completed | newsletter opt-in: yes\nTally 0QXpQA | new | partial | newsletter opt-in: yes'});
@@ -36,6 +41,28 @@ test('nested filters narrow an eligible audience and preserve false/empty/multip
  assert.equal(snapshot.recipients[0].origins,'Luma; Winter 2026 application');
  assert.equal(snapshot.recipientColumns.find(c=>c.key==='firstName').label,'First name');
 });
+test('new typed contains filters match partial tags without changing older saved rules',()=>{
+ const properties={Lists:['Demo Day','Newsletter']};
+ const contains={property:'Lists',operator:'contains',value:'demo'};
+ assert.equal(matchFilter(properties,contains),false);
+ assert.equal(matchFilter(properties,{...contains,partialMatch:true}),true);
+ assert.equal(matchFilter(properties,{...contains,operator:'not_contains',partialMatch:true}),false);
+ assert.equal(matchFilter(properties,{...contains,operator:'equals',value:'Demo Day'}),true);
+ assert.equal(matchFilter(properties,{...contains,operator:'equals',value:'Demo'}),false);
+ assert.equal(matchFilter(properties,{...contains,operator:'not_equals',value:'Demo Day'}),false);
+});
+
+test('recipient snapshots keep source field types and every allowed choice',()=>{
+ const schema=[
+  {name:'Stage',type:'select',notionType:'status',options:['New','Ready'],choices:[{name:'New',color:'gray'},{name:'Ready',color:'green'}]},
+  {name:'Interests',type:'multi_select',notionType:'multi_select',options:['Luma','Tally']}
+ ];
+ const snapshot=recipientSnapshot([{id:'page',properties:{Stage:'New',Interests:['Luma']}}],['Stage','Interests'],schema);
+ assert.deepEqual(snapshot.recipientColumns.find(column=>column.key==='stage').notion,schema[0]);
+ assert.deepEqual(snapshot.recipientColumns.find(column=>column.key==='interests').notion,schema[1]);
+ assert.equal(snapshot.recipients[0].interests,'Luma');
+});
+
 test('delivery revalidates consent, completion, membership and contact identity from Notion',async()=>{
  const savedEnv={...process.env},originalFetch=global.fetch;
  process.env.NOTION_DATA_SOURCE_ID=defaultSourceId;process.env.NOTION_API_KEY='synthetic-test';process.env.NOTION_CURRENT_APPLICATION_PHASE=phase;
@@ -85,4 +112,21 @@ test('application invitations allow absent opt-in but always respect active opt-
  for(const props of [{'Current member':true},{'Incomplete applications':[phase]},{'Completed applications':[phase]},{Email:'invalid'}]){
   assert.equal(eligibility(contact('excluded',{'Subscription status':'Not subscribed',...props}),'recruiting',phase),false);
  }
+});
+
+test('explicit member copies only apply to the exact reminder contact and never bypass opt-out',()=>{
+ const c=contact('member',{'Current member':true});
+ const memberCopies=[{notionPageId:'member',email:'member@example.org'}];
+ assert.equal(filterAudience([c],{purpose:'reminder',phase,memberCopies}).contacts.length,1);
+ assert.equal(filterAudience([c],{purpose:'reminder',phase}).contacts.length,0);
+ assert.equal(filterAudience([contact('other',{'Current member':true})],{purpose:'reminder',phase,memberCopies}).contacts.length,0);
+ assert.equal(filterAudience([contact('member',{'Current member':true,'Subscription status':'Unsubscribed'})],{purpose:'reminder',phase,memberCopies}).contacts.length,0);
+ assert.equal(filterAudience([contact('member',{'Subscription status':'Not subscribed'})],{purpose:'newsletter',phase,memberCopies}).contacts.length,0);
+});
+
+
+test('suppressed delivery addresses remain visible but are excluded from all sending purposes',()=>{
+ const c=contact('bounced',{'Email delivery status':'Suppressed','Incomplete applications':[phase],'Application reminder eligible':true});
+ assert.equal(eligibility(c,'browse',phase),true);
+ for(const purpose of ['newsletter','recruiting','reminder','deadline'])assert.equal(eligibility(c,purpose,phase),false);
 });

@@ -49,7 +49,6 @@ export async function updateNotionCheckbox(pageId, propertyName, value) {
   const properties = page.properties?.['Subscription status']?.type === 'select'
     ? {
       'Subscription status': { select: { name: value ? 'Subscribed' : 'Unsubscribed' } },
-      ...(page.properties?.Subscribed?.type === 'checkbox' ? { Subscribed: { checkbox: Boolean(value) } } : {}),
       ...(!value ? { 'Unsubscribed at': { date: { start: new Date().toISOString() } } } : {}),
     }
     : page.properties?.[propertyName]?.type === 'select'
@@ -70,12 +69,20 @@ export function isNotionSubscribed(page, propertyName = 'Subscribed') {
 
 export async function createNotionNewsletterPage({ sourceId, name, email, confirmedAt, source = "Website" }, fields = {}) {
   const { nameProperty = "Name", emailProperty = "Email", subscribedProperty = "Subscribed", dateProperty = "Confirmed At", sourceProperty = "Source" } = fields;
+  const schema = await notionRequest(`/data_sources/${encodeURIComponent(sourceId)}`);
+  const provenance = schema.properties?.[sourceProperty]
+    ? { [sourceProperty]: { rich_text: [{ text: { content: source } }] } }
+    : source === 'Website' && schema.properties?.Touchpoints?.multi_select?.options?.some(option => option.name === 'Web signup')
+      ? { Touchpoints: { multi_select: [{ name: 'Web signup' }] } }
+      : {};
   const properties = {
     [nameProperty]: { title: [{ text: { content: name } }] },
     [emailProperty]: { email },
-    [subscribedProperty]: { checkbox: true },
+    ...(schema.properties?.['Subscription status']?.type === 'select'
+      ? { 'Subscription status': { select: { name: 'Subscribed' } } }
+      : { [subscribedProperty]: { checkbox: true } }),
     [dateProperty]: { date: { start: confirmedAt } },
-    [sourceProperty]: { rich_text: [{ text: { content: source } }] }
+    ...provenance
   };
   return notionRequest("/pages", {
     method: "POST",
@@ -85,14 +92,17 @@ export async function createNotionNewsletterPage({ sourceId, name, email, confir
 
 export async function updateNotionNewsletterPage(pageId, { name, confirmedAt, source = "Website" }, fields = {}) {
   const { nameProperty = "Name", subscribedProperty = "Subscribed", dateProperty = "Confirmed At", sourceProperty = "Source" } = fields;
+  const page = await notionRequest(`/pages/${encodeURIComponent(pageId)}`);
   return notionRequest(`/pages/${encodeURIComponent(pageId)}`, {
     method: "PATCH",
     body: {
       properties: {
         [nameProperty]: { title: [{ text: { content: name } }] },
-        [subscribedProperty]: { checkbox: true },
+        ...(page.properties?.['Subscription status']?.type === 'select'
+          ? { 'Subscription status': { select: { name: 'Subscribed' } } }
+          : { [subscribedProperty]: { checkbox: true } }),
         [dateProperty]: { date: { start: confirmedAt } },
-        [sourceProperty]: { rich_text: [{ text: { content: source } }] }
+        ...(page.properties?.[sourceProperty] ? { [sourceProperty]: { rich_text: [{ text: { content: source } }] } } : {})
       }
     }
   });
