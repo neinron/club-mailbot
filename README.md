@@ -1,240 +1,127 @@
-# Mailbot
+# Club Mailbot
 
-Mailbot is a local tool for composing and preparing individually personalized club emails through the club's existing Gmail or Google Workspace account. It avoids a separate Mailgun service and its additional provider costs; Google account limits and delivery rules still apply. Mailbot never treats imported contacts as consent: newsletter eligibility must come from an explicit opt-in in Notion.
+Prepare and send personalized emails from the TUM Social AI Club’s Gmail or Google Workspace account. Build an audience from Notion or CSV, edit the email in the club’s layout, and review what each recipient will see before sending.
 
-**Club members** can follow the [illustrated Mailbot guide](docs/mailbot-guide.md) from sender setup through delivery review.
+![Mailbot composer showing a sample Project Night invitation with a personalized greeting and RSVP button](docs/screenshots/member-guide/05-compose.jpg)
+
+[Follow the illustrated member guide](docs/mailbot-guide.md) · [Install locally](#start) · [Check audience rules](#workflow) · [Resume an interrupted campaign](#live-progress-and-resuming)
+
+The guide’s eight screenshots use fictional contacts and example addresses.
 
 ## Start
 
-Requires **Node.js 20 or newer** and Git. The server uses Node’s built-in APIs; the interface uses React and shadcn/ui.
+Install Git and Node.js 20 or later, then run these commands from a terminal.
 
 ```bash
 git clone https://github.com/neinron/club-mailbot.git
 cd club-mailbot
 cp .env.example .env
-npm install
+npm ci
 npm run build:ui
 npm start
 ```
 
-Open [http://localhost:5177](http://localhost:5177). Start the server from the repository directory so it reads the correct `.env`. The interface, draft editor and test-email flow work without Notion; **real bulk sends require the configured Notion connection and delivery logging** described below. Enter Gmail credentials only in **Settings**, then test the connection and send a test email before a real campaign.
+Open [localhost:5177](http://localhost:5177). You can draft and preview a message immediately. A test email needs a connected sender. A live campaign also needs [Notion access](#notion-setup) for eligibility checks and delivery history.
 
-Each installation starts with an empty private workspace. Web-app drafts, recipient lists and filters are saved to `data/workspace.json`, with a browser cache. They survive restarts and are shared between localhost and 127.0.0.1 on that computer. The CLI uses ignored `drafts/` and `campaigns/` folders. Nothing synchronizes your local drafts to other team members automatically. Credentials are not saved with drafts or lists.
+### Connect the club sender
 
-### Club setup checklist
+1. Open **Settings** and enter the approved Gmail or Google Workspace address.
+2. Use the account owner’s approved credential. The default method uses a Google App Password and requires 2-Step Verification. **Advanced** settings also support an OAuth access token. [Google App Password instructions](https://support.google.com/accounts/answer/185833)
+3. Select **Test connection**. To check the actual email, send a separate test from **Send**.
 
-1. Ask the database owner to grant your Notion integration access to **Newsletter Subscribers**, then set `NOTION_API_KEY` in `.env`. Use the existing club data source, or set `NOTION_DATA_SOURCE_ID` and `NOTION_DATABASE_URL` for a compatible database. Change `NOTION_CURRENT_APPLICATION_PHASE` when recruitment moves to a new phase.
-2. Confirm the schema in [Notion setup](#notion-setup). Each team member needs authorized integration access; this repository does not include an API key or subscriber data.
-3. To use `{{unsubscribeUrl}}`, obtain the existing website signing secret through the club's approved credential-sharing process and configure `.env` as explained below. Do not generate a different secret for an already configured website. Cloning this repository does not deploy the website's signup or unsubscribe service.
-4. In **Settings**, enter the approved sender address and its Google App Password (or the advanced OAuth access token). Credentials remain in the running server’s memory for up to eight hours; restarting Mailbot clears them.
-5. Load or import recipients, save a named list, write and save a draft, then review it and send a test email to yourself. The real send button asks for confirmation.
+Mailbot keeps verified credentials in server memory for up to eight hours for an App Password or 50 minutes for an OAuth access token. Restarting Mailbot clears them.
 
-Keep Mailbot on your computer's loopback address. It is a local tool, not an authenticated public web service; do not expose its port to the internet.
+## Workflow
+
+| Step | What to do |
+| --- | --- |
+| **Recipients** | Start a group from Notion, a saved list, or an approved CSV or pasted list. For Notion, check the campaign purpose and filter by fields such as **Touchpoints**. Compare the matched and eligible counts, then select **Use recipients**. |
+| **Message** | Set the subject, sender name and optional reply address. Edit the email in **Compose**, insert fields such as `{{firstName}}`, and add buttons. Use **HTML** for custom markup. |
+| **Review** | Switch between recipient rows to verify greetings, personal links and missing values. Check the desktop, mobile, dark and images-off previews. |
+| **Send** | Send a test to an address you control. Check the received message and its links, then confirm the campaign after reviewing the sender and final recipient count. |
+
+A test uses the selected recipient’s personalization and delivers only to the address entered in **Send a test**. Mailbot strips Cc and Bcc from the test. Assign one owner per live campaign and keep Mailbot running until the delivery log finishes.
+
+### Audience rules
+
+New Notion selections default to newsletter eligibility unless a sending purpose is already configured. Check the purpose before attaching the group. Mailbot rechecks live eligibility against Notion before delivery.
+
+| Purpose | Eligible audience |
+| --- | --- |
+| **Newsletter** | Contacts whose current **Subscription status** is **Subscribed**. |
+| **Recruiting invitation** | Contacts without an active unsubscribe, current membership, or an open or completed application in the current phase. |
+| **Application deadline** | Contacts without an active unsubscribe, current membership, or a submitted application in the current phase. This includes people who have started an application. |
+| **Finish your application** | Eligible contacts with an incomplete application in the current phase, no completed application, and no current membership. |
+| **Browse all contacts** | Available for review only. |
+
+Newsletter eligibility comes from explicit opt-in. CSV imports and manual entries add addresses without granting consent. Check manually assembled lists against the approved source. Refreshing a Notion group or applying its filters can replace local table edits, so review the resulting rows before sending.
 
 ## Notion setup
 
-Mailbot is tailored to the club's subscriber schema. These exact properties are needed for delivery logging and manual-contact creation:
+Ask the database owner to grant your integration access to **Newsletter Subscribers**. Copy the settings from [`.env.example`](.env.example) into your local `.env` and set `NOTION_API_KEY`. Mailbot has defaults for the club data source. To use a compatible source, set `NOTION_DATA_SOURCE_ID` and `NOTION_DATABASE_URL`. Set `NOTION_CURRENT_APPLICATION_PHASE` to the active recruitment phase and restart Mailbot after configuration changes.
 
-| Property | Notion type / values |
+| Property | Notion type and use |
 | --- | --- |
-| Name | Title; full name |
-| Email | Email; unique normalized address |
-| First name / Last name | Text; optional personalization fields |
-| Subscription status | Select: `Subscribed`, `Not subscribed`, `Pending confirmation`, `Unsubscribed` |
-| Touchpoints | Multi-select; audience labels |
+| **Name** | Title for the contact’s full name |
+| **Email** | Email with one record per normalized address |
+| **First name**, **Last name** | Optional text fields for personalization |
+| **Subscription status** | Select with **Subscribed**, **Not subscribed**, **Pending confirmation**, and **Unsubscribed** |
+| **Touchpoints** | Multi-select for signup sources, event tags, and application or membership history |
 
-The integration needs to read contacts, create/update pages, and append delivery-history blocks. The contact page body is the email history. Each send attempt appends one entry with its time, campaign, subject and outcome. Optional recruitment fields and `Touchpoints` labels are described under **Choose recipients**. Importing a contact never grants newsletter consent. The club's existing database already contains this schema; use its authorized integration rather than duplicating the database.
+The integration needs to read contacts, create and update pages, and append delivery history to contact pages. Mailbot matches manual entries by normalized email. When it creates a missing contact for delivery logging, it sets the status to **Not subscribed**. Duplicate Notion records for an address block delivery to that address.
 
-## Compose from the CLI
+### Notion source of truth and opt-outs
 
-The CLI can create and update campaign drafts, attach an eligible recipient CSV, check personalization fields, render an HTML preview, export a recipient list from Notion, and record opt-outs. It deliberately has no send command.
+The club website handles public signup, double opt-in and unsubscribe. For newsletters, include `{{unsubscribeUrl}}` in the message and check the rendered link in a test email.
+
+Set `PUBLIC_BASE_URL` to the deployed website and explicitly configure `NOTION_DATA_SOURCE_ID` in `.env`. Obtain the existing website signing secret from the club and set `NEWSLETTER_TOKEN_SECRET` to that value. Set `MAILBOT_UNSUBSCRIBE_SECRET` to the same value if you generate links with the CLI. The website records confirmed subscription changes in Notion. For a legacy checkbox source, configure the exact email and opt-in property names for that source.
+
+## Delivery and recovery
+
+Mailbot sends one message per recipient row and records each live attempt in the local journal under `data/deliveries/` and on the linked Notion contact page. If Notion is temporarily unavailable after SMTP accepts a message, Mailbot keeps the send result and retries the history sync separately.
+
+| Status | Meaning and next step |
+| --- | --- |
+| **Sent** | Gmail’s SMTP server accepted the message. Inbox placement is separate. |
+| **Failed** | Mailbot recorded a failed attempt. Check the error before retrying. |
+| **Unknown** | Mailbot could not establish the outcome. Check the sender’s Gmail activity and local journal before retrying. |
+
+### Live progress and resuming
+
+Keep the local server running and your computer awake during a campaign. Refreshing the browser leaves the current send running.
+
+After an interruption, use the same computer and local workspace, draft name, subject and sender. Mailbot uses the local journal to skip matching **Sent** entries and block unresolved **Unknown** attempts. A second computer has a separate journal. If Gmail throttles the campaign, check the error and the account’s sending limits before resuming. [Gmail sending limits](https://support.google.com/mail/answer/22839)
+
+## Local data and credentials
+
+| Data | Location |
+| --- | --- |
+| Web drafts and recipient groups | `data/workspace.json`, with a browser cache |
+| Delivery journal | `data/deliveries/` |
+| CLI drafts and exports | `drafts/` and `campaigns/` |
+| Notion and website integration settings | Local `.env` |
+| Verified Gmail credentials | Running server memory |
+
+Keep Mailbot on loopback. Keep local data, credentials, and exports containing real contacts out of Git and screenshots. Draft exports can contain recipient data, so share them only through approved club channels.
+
+## CLI and development
+
+Use the CLI to prepare recipient files, export eligible Notion contacts, validate drafts, preview HTML or manage opt-outs. Send campaigns through the web interface.
 
 ```bash
-npm run mailbot -- draft create \
-  --name "Recruiting launch" \
-  --subject "Applications are open" \
-  --body-file drafts/recruiting-message.html \
-  --recipients campaigns/recruiting-opt-ins.csv \
-  --design drafts/brand-design.json
-
+npm run mailbot -- --help
 npm run mailbot -- draft check --name "Recruiting launch"
 npm run mailbot -- draft preview --name "Recruiting launch" --output /tmp/recruiting-preview.html
 ```
 
-`--body-file` may contain HTML authored for the visual editor. `--html-file` is an optional full email wrapper and should contain `{{content}}`; `--design` is a JSON file with `layout`, `accent`, `background`, `font`, `padding`, and `width` fields. Drafts never include Gmail credentials. To load the result into the web app, open **mail title dropdown → Import draft** and choose `drafts/recruiting-launch.json`. To edit an existing browser draft from the CLI, export it as JSON, run `npm run mailbot -- draft import --input <file.json>`, then use `draft update`.
+Web drafts can be exported as JSON and imported with `draft import --input <file.json>`. To bring a CLI draft into the web app, use **Import draft** in the mail title menu. Custom HTML wrappers use `{{content}}`. Existing button macros such as `button{{Choose a slot,interviewLink}}` also work.
 
-### Notion source of truth and opt-outs
-
-Configure a Notion internal integration with access to the newsletter/applicant data source, then put its token in the ignored `.env` file as `NOTION_API_KEY=...`. Do not commit or screenshot that file. For a legacy application source, inspect its schema first: it may use `Marketing Updates Opt In`, `Email`, and `Full Name`. That is different from the current subscriber database’s `Subscription status` select. Exclude members explicitly when exporting a legacy application source. Set the application source and exact property names for public unsubscribe handling in `.env` as well:
-
-```dotenv
-NOTION_DATA_SOURCE_ID=your-winter-2026-applications-source
-NOTION_EMAIL_PROPERTY=Email
-NOTION_OPT_IN_PROPERTY=Marketing Updates Opt In
-PUBLIC_BASE_URL=https://tum-socialaiclub.de
-NEWSLETTER_TOKEN_SECRET=use-the-same-random-secret-as-the-website-worker
-```
-
-Use `npm run mailbot -- notion inspect --source <id>` to inspect the schema. Export only checked opt-ins and exclude every email address listed on a current member record:
-
-```bash
-npm run mailbot -- notion export \
-  --source <winter-2026-applications-source> --email "Email" \
-  --name "Full Name" --consent "Marketing Updates Opt In" \
-  --exclude-source <members-source> \
-  --exclude-email-property "E-Mail" \
-  --exclude-email-property "Education Email  " \
-  --output campaigns/newsletter.csv
-```
-
-`notion sync` saves the current Notion audience to `campaigns/notion-newsletter.csv`; add `--force` when refreshing that existing file. An unsubscribe change is a dry run unless `--apply` is supplied:
-
-```bash
-npm run mailbot -- notion unsubscribe --source <data-source-id> \
-  --email "Email" --consent "Marketing Updates Opt In" \
-  --address person@example.org --apply
-```
-
-Create a signed link for a Notion page with `unsubscribe link`. The link opens the TUM Social AI website, where the recipient confirms the change before the website Worker updates the opt-in in Notion. Set `PUBLIC_BASE_URL=https://tum-socialaiclub.de` and the same `NEWSLETTER_TOKEN_SECRET` in the Mailbot and website Worker. The Mailbot remains private; only the website hosts signup, confirmation, and unsubscribe pages.
-
-### Website newsletter subscriptions
-
-Public signups are stored in the [Newsletter Subscribers database](https://app.notion.com/p/83120150-36a4-4b90-be22-b9b05cd1b9df). The signup form, double-opt-in confirmation, and unsubscribe pages are part of the TUM Social AI Club website. Their server-side routes run in the website's Cloudflare Worker and update Notion directly. Confirmation uses a one-time encrypted token that expires after 48 hours; unsubscribe links are signed for a specific Notion page and email. The website Worker uses Gmail API OAuth to send confirmation emails and Durable Object rate limits. Its deployment configuration and required secrets are documented in the website repository. The Mailbot is only for private campaign preparation and sending.
-
-For newsletter delivery, `Subscription status` is authoritative: only `Subscribed` is eligible. Application invitations use the club’s separate rule: contacts without an opt-in are allowed, but active `Unsubscribed` contacts, members and current open/completed applicants are excluded. This does not change anyone’s subscription status. `Pending confirmation`, `Unsubscribed`, and empty statuses are excluded, even if the legacy `Subscribed` checkbox is checked. Notion exports and CLI unsubscribe support the select; older recruitment checkbox sources continue to work. Edit the select in Notion. Native automations record the status-change time and person and keep the hidden legacy checkbox synchronized for compatibility. Do not infer consent from an RSVP or an imported address.
-
-## Workflow
-
-### 1. Choose recipients
-
-In **Recipients**, open the group title dropdown to reuse a saved group or choose **New group**. The picker offers **Notion**, **Saved lists** and **CSV / paste**. Notion opens with **All contacts**. Its API key stays on the local server. The draft and group menus show the most recently saved items first.
-
-| Sending purpose | Required audience |
+| Path | Contents |
 | --- | --- |
-| Recruiting invitation | Not actively Unsubscribed, not a current member, no open or completed application in the current phase; newsletter opt-in is not required |
-| Application deadline | Not actively Unsubscribed, not a member, no submitted application in the current phase; includes started applications |
-| Newsletter | Subscription status is Subscribed |
-| Finish your application | Eligible incomplete application in the current phase, no completed application, not a current member; newsletter opt-in is separate |
-| Browse all contacts | Review only; cannot send |
+| `ui/` | React interface and shadcn/ui components |
+| `public/` | Editor and audience modules, plus built UI assets |
+| `server/` | Local Node server, SMTP delivery and Notion integration |
+| `bin/mailbot.js` | CLI entry point |
+| `tests/` | Local automated tests |
 
-In **Set filters**, choose a property, operator and value. Connect rules with **And** or **Or** and add nested groups when needed. The search field and sort control sit above the table. Use **+** in the table header to choose personalization columns. **Save group** stores the current selection and filters locally.
-
-**Use recipients** attaches the eligible contacts immediately. Mailbot uses the current or selected saved group's sending purpose when one is configured, and defaults new Notion selections to newsletter eligibility. Manual and CSV groups use their existing recipient data. Back in **Recipients**, choose **Apply filters** to rebuild a Notion-backed group from the inline filters. Refreshing from Notion or applying new filters can replace local table edits.
-
-**Touchpoints** is the visible contact-tag field in Notion and Mailbot. It combines signup sources, application history and relationship tags such as `Web signup`, `Winter 26 · Submitted` and `Member`. Luma events use `Luma Event · DD.MM.YY · Short name`, for example `Luma Event · 13.10.26 · Demo Day 2`. Use these tags in the **filter** panel. The **Saved list** dropdown holds your own recipient groups. Campaign eligibility is checked when a group is attached and before delivery. The subscription status controls newsletter eligibility.
-
-The older source and consent properties are retained for compatibility, audit history and automatic unsubscribe handling, and hidden in the main Notion views. Lists are populated from the existing records; new external imports and website changes still need to keep those labels synchronized. Mailbot normalizes consent labels against the current subscription status when loading, and revalidates eligibility immediately before delivery.
-
-Use **{{firstName}}**, **{{lastName}}** and **{{name}}** in messages. Notion's dedicated first-name field is preserved; without one, `Hi {{firstName}},` becomes `Hi there,`. Extra selected fields appear under **Insert Personalization**, with variables such as `{{marketingOptInPhases}}` and `{{lumaEvents}}`. The Notion Page ID is retained for unsubscribe links and validation.
-
-### Per-contact delivery history
-
-Real sends require the configured Notion database. Each SMTP attempt is journaled privately under `data/deliveries/` before sending. A paragraph on the contact page records the outcome of each attempt with its unique delivery ID, time, campaign, personalized subject, sender and purpose. `Sent` means accepted by SMTP; it does not prove inbox delivery or an open. Failed attempts are separate, and an interrupted attempt is `Unknown` until checked. Test emails do not modify contact delivery history.
-
-Manual recipients are matched by exact normalized email. An address without a contact is created as **Not subscribed**, without granting consent; ambiguous duplicate addresses block the send. Additional To/CC/BCC recipients are recorded too. The journal contains metadata only, never SMTP secrets or message bodies, and is excluded from Git. If Notion is temporarily unavailable after SMTP acceptance, Mailbot keeps the successful send result and shows a synchronization warning. A background retry and server startup recovery synchronize pending metadata only; they never resend email. Check an unknown attempt before deciding to send again. Historical emails are not backfilled automatically.
-
-Before a real send, the server re-reads Notion and blocks ineligible contacts: opt-outs, newly completed applications, newly marked members for recruiting/reminders, removed contacts, changed email identities and review-only audiences. Test emails go only to the explicit test address. Loading or saving never sends email. There is no fixed 250-recipient cap. Sending is sequential with a minimum 1.2-second pause, and Google account limits still apply.
-
-Local `.env` settings (never commit the key):
-
-```dotenv
-NOTION_API_KEY=<scoped integration key>
-NOTION_DATA_SOURCE_ID=ee78a5b5-8a15-48e5-b5fd-16f821e57d1c
-NOTION_DATABASE_URL=https://www.notion.so/8312015036a44b90be22b9b05cd1b9df
-NOTION_CURRENT_APPLICATION_PHASE="Winter 2026"
-```
-
-Grant the integration access only to this database. Change `NOTION_CURRENT_APPLICATION_PHASE` for the next round and restart Mailbot. Keep application and membership fields current in Notion. Views and filters organize contacts; they are not separate access-control boundaries.
-
-
-
-
-In **recipient list dropdown → Import CSV or paste**, choose a file or paste comma-, semicolon- or tab-separated data, with or without a header. **Use imported recipients** attaches it; cancelling leaves the campaign unchanged. Use the pencil to rename a column, × to remove it, and + on the right to add a column. The small info icon opens contact details; columns are also available as editor variables. Saved lists and drafts are stored on this computer in `data/workspace.json` (ignored by Git, file permissions 0600), with a browser cache. Existing browser data is imported automatically on first load. They survive server restarts and are shared between localhost and 127.0.0.1. App passwords and secrets are never saved. Back up the private data directory separately; it contains contact data. A failed disk save is shown in the save status.
-
-For larger or repeat lists, prepare the file in the CLI instead of pasting contacts one by one:
-
-```bash
-node bin/mailbot.js recipients prepare \
-  --input /path/to/luma-guests.csv \
-  --exclude /path/to/current-members.csv \
-  --output campaigns/demo-day-rsvps.csv
-```
-
-The CLI accepts CSV or TSV files, with or without a header. Repeat `--exclude` for additional suppression or member exports. It deduplicates email addresses case-insensitively, drops invalid addresses, reports counts without printing contact data, and writes a headerless `Name,Email` CSV that can be loaded with **Choose CSV file** in Recipients. Output files are kept in the ignored `campaigns/` folder by default, and an existing file is never replaced unless you pass `--force`. For a preview without writing a file, omit `--output` to print the CSV to standard output.
-
-Use only contacts who are eligible to receive that message, such as applicants who opted in to updates. A manual CSV import does not determine consent or membership; use the Notion export workflow above when those rules apply.
-
-### 2. Write the message
-
-In **Message**, create or rename a draft, add a subject, and edit the email directly inside its rendered layout. Headings, body text, spacing, logo and buttons appear in the same layout used by Review. Click text to edit it and a button to change its label, target or style. Use **Insert Personalization** to insert recipient fields such as `{{firstName}}`; use **HTML** for custom markup. Buttons and horizontal dividers can be inserted from the toolbar. Select text to choose Albert Sans or League Spartan, a size from 1–200 px and a weight from 100–900. The toolbar reflects the current selection; Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z undo and redo editor changes. Web fonts are requested remotely from Google and are not attachments; unsupported or privacy-restricted mail clients may use fallback fonts. Personalization fields remain visible in the editor as `{{firstName}}`; **Review** resolves them for the selected recipient.
-
-Saved HTML layouts are preserved. The composer focuses on subject and content; layout-building controls are no longer exposed. Templates used by the CLI must include `{{content}}`.
-
-### 3. Review
-
-**Review** shows the email in a mail-window frame with sender, recipient name and email, and subject. Switch between desktop/mobile, light/dark and blocked-image previews.
-
-### 4. Send
-
-**Send** keeps a smaller preview on the left and the test and campaign controls on the right. Delivery progress and the scrollable log remain visible below the controls. Enter sender credentials in **Settings**. The test uses one selected recipient’s personalization and goes only to the explicit test address, with Cc/Bcc removed. Bulk sending still requires confirmation. Loading, filtering and saving audiences never sends mail.
-
-### Live progress and resuming
-
-The send panel updates every two seconds with sent, failed, skipped and processed counts. It identifies active, finished or interrupted sends and warns when no recent progress is visible. For new runs it also shows whether Mailbot is sending or saving the result to Notion. Only one real campaign runs at a time. Refreshing the browser does not cancel the server's current request; keep the server running and the computer awake.
-
-After an interruption, restart the same saved campaign with the **same draft name, subject and sender**. The private local journal skips matching `Sent` entries and blocks `Unknown` attempts until manually verified. Failed attempts can be retried. Changing the identifying fields, deleting the journal or using another computer can bypass this local duplicate check. There is no cross-computer send lock, so coordinate who sends each campaign. Notion history is synchronized separately; it does not automatically transfer another computer's resume state.
-
-Do not interpret a stale counter as permission to restart the server or send again. Check the journal and provider first. `Sent` means SMTP acceptance, not confirmed inbox delivery.
-
-## Connect the Gmail account
-
-1. Open **Settings** in the header and enter the sender's Gmail or Google Workspace address.
-2. Mailbot's default sign-in method is a Google **App Password**. Google requires 2-Step Verification to create one. Generate it in the Google Account's App Passwords settings, then paste it into the app-password field. Do not use the normal Google account password. Google's current instructions and restrictions are [here](https://support.google.com/accounts/answer/185833).
-3. Test the connection. After a successful connection test or SMTP send, the verified app password stays in the local Mailbot server's process memory for up to 8 hours (OAuth access tokens: 50 minutes). Refreshing or closing a browser tab does not require re-entry while that server session remains valid. Restarting Mailbot clears it. **Forget password** clears the remembered credential immediately; an already running send retains its in-flight credential until it stops. The credential is never returned to the browser or stored in drafts, browser storage, files, or GitHub.
-
-![Gmail sender settings with a sample address and blank password field](docs/screenshots/member-guide/08-settings.jpg)
-
-Google recommends “Sign in with Google” when an app supports it. Mailbot also exposes an advanced OAuth access-token mode; use the organization's approved method if available. Google Workspace administrators can restrict app passwords, so contact the account owner if the setting is unavailable.
-
-**Shared credentials:** ask the account owner where the approved credential is stored, for example in the club’s password manager. Repository access does not grant mailbox access. Never put the password in this repository, screenshots, or this guide.
-
-## Why this tool
-
-Mailbot uses Gmail SMTP through an existing club account, so the club does not need a separate paid Mailgun account for this workflow. It stores web drafts on local disk with a browser cache and CLI drafts as local JSON, renders one personalized message per row, and supports a test-only send to an explicit address. Notion remains the source for opt-in status when the integration is configured.
-
-## Data and security
-
-- Web-app drafts and recipient lists are saved in ignored `data/workspace.json`, with a browser cache. CLI drafts and exports use ignored `drafts/` and `campaigns/` folders. Back up private data securely, never through Git.
-- The app password and OAuth token are never persisted to disk. Verified credentials may be reused from the local server’s temporary process memory. SMTP command logging masks authentication secrets.
-- Do not put real drafts, recipient exports, audit files, or credentials in GitHub. The `data/`, `campaigns/`, `drafts/`, `.env` and local progress files are ignored by Git.
-- The test-send route requires an explicit valid test address and sends only to it, without Cc or Bcc.
-- Google limits sending and can block suspicious or excessive activity. Check the current [Gmail sending limits](https://support.google.com/mail/answer/22839?hl=en) and the relevant Workspace policy before a large send.
-
-## Screenshots
-
-The [member guide](docs/mailbot-guide.md) includes eight screenshots from a separate example workspace using fictional contacts and `example.invalid` addresses.
-
-## Tests
-
-```bash
-npm test
-```
-
-Tests cover CLI draft creation, recipient preparation, message rendering, and test-recipient isolation. They do not connect to Gmail or Notion.
-
-## Template compatibility
-
-Existing HTML and button macros remain supported:
-
-```html
-<p>Hi {{firstName}},</p>
-button{{Choose a slot,interviewLink}}
-```
-
-The visual editor shows button macros as editable buttons. Pasted rich text is inserted as plain text; use HTML mode for custom markup. Previews are sandboxed with scripts disabled.
-
-## Interface development
-
-The campaign workflow is **Recipients → Message → Review → Send**. Choose or rename a draft from the title dropdown, or start with **New mail**. The recipient list title is also its dropdown, with **New list** and **Save list** beside it. Rename columns with the pencil, remove them with ×, and add a column on the right. The first table row adds a person. Review shows the full email; Send uses a smaller preview beside the delivery controls. Completed delivery receipts stay with their campaign.
-
-The interface components live in `ui/`, with official shadcn/ui sources in `ui/components/ui/`. The existing editor and audience modules remain in `public/`. After changing components or styles, run `npm run build:ui` and reload the browser. This generates `public/studio.js` and `public/studio.css`, which the Node server serves directly.
+Run `npm run build:ui` after interface changes. Run `npm test` to check draft handling, recipient preparation, rendering and delivery safeguards with local tests.
